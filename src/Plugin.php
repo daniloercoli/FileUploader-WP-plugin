@@ -62,6 +62,21 @@ class Plugin
                 ],
             ],
         ]);
+
+        // HEAD /files/{filename} → metadata veloci via header (no body)
+        register_rest_route(self::REST_NS, '/files/(?P<filename>[^/]+)', [
+            [
+                'methods'  => 'HEAD',
+                'callback' => [__CLASS__, 'route_head_file'],
+                'permission_callback' => [__CLASS__, 'require_auth'],
+                'args' => [
+                    'filename' => [
+                        'description' => 'Base filename to inspect (no slashes)',
+                        'required' => true,
+                    ],
+                ],
+            ],
+        ]);
     }
 
     /** Permette solo richieste autenticate (App Password) */
@@ -270,6 +285,55 @@ class Plugin
             'owner'   => $paths['username'],
         ]);
     }
+
+    /** HEAD /files/{filename} — ritorna metadata via header, nessun body */
+public static function route_head_file( \WP_REST_Request $req ) : \WP_REST_Response {
+    $user = \wp_get_current_user();
+    if ( ! $user || 0 === $user->ID ) {
+        return new \WP_REST_Response( [ 'ok' => false, 'error' => 'Not authenticated' ], 401 );
+    }
+
+    $param = $req->get_param('filename');
+    $base  = self::sanitize_user_filename( $param );
+    if ( \is_wp_error( $base ) ) {
+        return new \WP_REST_Response( [ 'ok' => false, 'error' => $base->get_error_message() ], 400 );
+    }
+
+    $paths = self::get_user_base( $user );
+    $abs   = $paths['path'] . DIRECTORY_SEPARATOR . $base;
+
+    if ( ! \file_exists( $abs ) || ! \is_file( $abs ) ) {
+        return new \WP_REST_Response( [ 'ok' => false, 'error' => 'File not found' ], 404 );
+    }
+
+    // Metadata
+    $size  = @\filesize( $abs );
+    $mtime = @\filemtime( $abs );
+    $ft    = \wp_check_filetype( $base );
+    $mime  = ($ft && isset($ft['type'])) ? $ft['type'] : 'application/octet-stream';
+
+    // ETag semplice basata su path utente + size + mtime
+    $etag = '"' . \md5( $paths['username'] . '/' . $base . ':' . (int)$size . ':' . (int)$mtime ) . '"';
+
+    // Risposta senza corpo: metadati nei header
+    $resp = new \WP_REST_Response( null, 200 );
+    $resp->header( 'Content-Length', '0' );
+    $resp->header( 'Cache-Control', 'private, max-age=60' );
+    if ( \is_int( $mtime ) ) {
+        $resp->header( 'Last-Modified', \gmdate( 'D, d M Y H:i:s', $mtime ) . ' GMT' );
+    }
+    $resp->header( 'ETag', $etag );
+
+    // Header custom “comodi” per il client
+    if ( \is_int( $size ) ) {
+        $resp->header( 'X-PFU-Size', (string)$size );
+    }
+    $resp->header( 'X-PFU-Mime', $mime );
+    $resp->header( 'X-PFU-Name', $base );
+    $resp->header( 'X-PFU-Owner', $paths['username'] );
+
+    return $resp;
+}
 
     /** Crea un index.html vuoto nella cartella per evitare directory listing (se attivo sul server) */
     private static function ensure_index_html(string $dir): void
