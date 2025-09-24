@@ -59,6 +59,29 @@ Authentication uses **WordPress Application Passwords** over HTTPS.
 > RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 > ```
 
+### MAMP Authentication Header Configuration
+
+#### 1. Enable Apache Rewrite Module
+Open MAMP's Apache configuration file:
+- **Mac**: `/Applications/MAMP/conf/apache/httpd.conf`
+- **Windows**: `C:\MAMP\conf\apache\httpd.conf`
+
+Find and uncomment this line (remove the #):
+```apache
+LoadModule rewrite_module modules/mod_rewrite.so
+```
+
+#### 2. Configure Authorization Header Passing
+Add this line to the same `httpd.conf` file (in the directory section or near the end):
+```apache
+SetEnvIf Authorization .+ HTTP_AUTHORIZATION=$0
+```
+
+#### 3. Restart MAMP
+Completely restart MAMP for changes to take effect.
+
+> **Note**: These changes are required because MAMP doesn't pass HTTP Authorization headers by default, which prevents WordPress Application Passwords from working with REST API authentication.
+
 ---
 
 ## Endpoints
