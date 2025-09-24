@@ -8,7 +8,6 @@ if (! defined('ABSPATH')) {
 
 class Plugin
 {
-
     const REST_NS   = 'fileuploader/v1';
     const SLUG      = 'private-file-uploader';
     const SUB_BASE  = 'media/private-file-uploader'; // sotto uploads/
@@ -220,6 +219,7 @@ class Plugin
                     continue;
                 }
                 $abs = $dir . DIRECTORY_SEPARATOR . $entry;
+                if ( \is_link( $abs ) ) { continue; }  // niente symlink
                 if (is_file($abs)) {
                     $size = @filesize($abs);
                     $mtime = @filemtime($abs);
@@ -268,9 +268,17 @@ class Plugin
         $paths = self::get_user_base($user);
         $abs   = $paths['path'] . DIRECTORY_SEPARATOR . $base;
 
+        if (! self::path_within_base($paths['path'], $abs)) {
+            return new \WP_REST_Response(['ok' => false, 'error' => 'Invalid file path'], 400);
+        }
+
         // Verifica che sia un file dentro la cartella dell’utente
         if (! file_exists($abs) || ! is_file($abs)) {
             return new \WP_REST_Response(['ok' => false, 'error' => 'File not found'], 404);
+        }
+
+        if (\is_link($abs)) {
+            return new \WP_REST_Response(['ok' => false, 'error' => 'Symbolic links not allowed'], 400);
         }
 
         // Cancella
@@ -287,53 +295,58 @@ class Plugin
     }
 
     /** HEAD /files/{filename} — ritorna metadata via header, nessun body */
-public static function route_head_file( \WP_REST_Request $req ) : \WP_REST_Response {
-    $user = \wp_get_current_user();
-    if ( ! $user || 0 === $user->ID ) {
-        return new \WP_REST_Response( [ 'ok' => false, 'error' => 'Not authenticated' ], 401 );
+    public static function route_head_file(\WP_REST_Request $req): \WP_REST_Response
+    {
+        $user = \wp_get_current_user();
+        if (! $user || 0 === $user->ID) {
+            return new \WP_REST_Response(['ok' => false, 'error' => 'Not authenticated'], 401);
+        }
+
+        $param = $req->get_param('filename');
+        $base  = self::sanitize_user_filename($param);
+        if (\is_wp_error($base)) {
+            return new \WP_REST_Response(['ok' => false, 'error' => $base->get_error_message()], 400);
+        }
+
+        $paths = self::get_user_base($user);
+        $abs   = $paths['path'] . DIRECTORY_SEPARATOR . $base;
+
+        if (! self::path_within_base($paths['path'], $abs)) {
+            return new \WP_REST_Response(['ok' => false, 'error' => 'Invalid file path'], 400);
+        }
+
+        if (! \file_exists($abs) || ! \is_file($abs)) {
+            return new \WP_REST_Response(['ok' => false, 'error' => 'File not found'], 404);
+        }
+
+        // Metadata
+        $size  = @\filesize($abs);
+        $mtime = @\filemtime($abs);
+        $ft    = \wp_check_filetype($base);
+        $mime  = ($ft && isset($ft['type'])) ? $ft['type'] : 'application/octet-stream';
+
+        // ETag semplice basata su path utente + size + mtime
+        $etag = '"' . \md5($paths['username'] . '/' . $base . ':' . (int)$size . ':' . (int)$mtime) . '"';
+
+        // Risposta senza corpo: metadati nei header
+        $resp = new \WP_REST_Response(null, 200);
+        $resp->header('Content-Length', '0');
+        $resp->header('Cache-Control', 'private, max-age=60');
+        if (\is_int($mtime)) {
+            $resp->header('Last-Modified', \gmdate('D, d M Y H:i:s', $mtime) . ' GMT');
+        }
+        $resp->header('ETag', $etag);
+
+        // Header custom “comodi” per il client
+        if (\is_int($size)) {
+            $resp->header('X-PFU-Size', (string)$size);
+        }
+        $resp->header('X-PFU-Mime', $mime);
+        $resp->header('X-PFU-Name', $base);
+        $resp->header('X-PFU-Owner', $paths['username']);
+
+        return $resp;
     }
-
-    $param = $req->get_param('filename');
-    $base  = self::sanitize_user_filename( $param );
-    if ( \is_wp_error( $base ) ) {
-        return new \WP_REST_Response( [ 'ok' => false, 'error' => $base->get_error_message() ], 400 );
-    }
-
-    $paths = self::get_user_base( $user );
-    $abs   = $paths['path'] . DIRECTORY_SEPARATOR . $base;
-
-    if ( ! \file_exists( $abs ) || ! \is_file( $abs ) ) {
-        return new \WP_REST_Response( [ 'ok' => false, 'error' => 'File not found' ], 404 );
-    }
-
-    // Metadata
-    $size  = @\filesize( $abs );
-    $mtime = @\filemtime( $abs );
-    $ft    = \wp_check_filetype( $base );
-    $mime  = ($ft && isset($ft['type'])) ? $ft['type'] : 'application/octet-stream';
-
-    // ETag semplice basata su path utente + size + mtime
-    $etag = '"' . \md5( $paths['username'] . '/' . $base . ':' . (int)$size . ':' . (int)$mtime ) . '"';
-
-    // Risposta senza corpo: metadati nei header
-    $resp = new \WP_REST_Response( null, 200 );
-    $resp->header( 'Content-Length', '0' );
-    $resp->header( 'Cache-Control', 'private, max-age=60' );
-    if ( \is_int( $mtime ) ) {
-        $resp->header( 'Last-Modified', \gmdate( 'D, d M Y H:i:s', $mtime ) . ' GMT' );
-    }
-    $resp->header( 'ETag', $etag );
-
-    // Header custom “comodi” per il client
-    if ( \is_int( $size ) ) {
-        $resp->header( 'X-PFU-Size', (string)$size );
-    }
-    $resp->header( 'X-PFU-Mime', $mime );
-    $resp->header( 'X-PFU-Name', $base );
-    $resp->header( 'X-PFU-Owner', $paths['username'] );
-
-    return $resp;
-}
 
     /** Crea un index.html vuoto nella cartella per evitare directory listing (se attivo sul server) */
     private static function ensure_index_html(string $dir): void
@@ -387,5 +400,19 @@ public static function route_head_file( \WP_REST_Request $req ) : \WP_REST_Respo
             return new \WP_Error('pfu_bad_filename', 'Filename contains invalid characters');
         }
         return $base;
+    }
+
+    //Helper: Aggiungiamo una verifica con realpath() 
+    //per assicurarci che il path target cada davvero dentro alla cartella utente (protezione extra contro symlink/traversal)
+    /** TRUE se $candidate è dentro $base (dopo realpath), altrimenti FALSE */
+    private static function path_within_base(string $base, string $candidate): bool
+    {
+        $baseReal = \realpath($base);
+        $candReal = \realpath($candidate);
+        if ($baseReal === false || $candReal === false) {
+            return false;
+        }
+        $baseReal = rtrim($baseReal, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+        return strncmp($candReal, $baseReal, strlen($baseReal)) === 0;
     }
 }
