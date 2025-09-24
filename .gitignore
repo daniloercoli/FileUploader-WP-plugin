@@ -1,0 +1,16 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+
+# Dependency/build
+vendor/
+node_modules/
+dist/
+build/
+
+# Composer / PHP tools (se li userai)
+composer.lock
