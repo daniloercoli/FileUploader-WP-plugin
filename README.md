@@ -42,7 +42,9 @@ Authentication uses **WordPress Application Passwords** over HTTPS.
 
 ---
 
-## Authentication (Application Passwords)
+## Configuration & Hardening
+
+### Authentication (Application Passwords)
 
 - Each user can create an **Application Password** from  
   **Users → Profile → Application Passwords**.
@@ -81,6 +83,66 @@ SetEnvIf Authorization .+ HTTP_AUTHORIZATION=$0
 Completely restart MAMP for changes to take effect.
 
 > **Note**: These changes are required because MAMP doesn't pass HTTP Authorization headers by default, which prevents WordPress Application Passwords from working with REST API authentication.
+
+### Configuration (filters)
+
+You can customize **maximum upload size** and the **allowed MIME types** using WordPress filters
+(from your theme’s `functions.php` or a small must-use plugin).
+
+#### Max upload size
+
+Default: **50 MB**. Return a value in **bytes**.
+
+```php
+// Example: 200 MB
+add_filter('pfu_max_upload_bytes', function () {
+    return 200 * 1024 * 1024;
+});
+
+// Example: 1 GB
+add_filter('pfu_max_upload_bytes', fn () => 1024 * 1024 * 1024);
+```
+
+> Note: PHP/server limits must also allow the requested size:
+> `upload_max_filesize`, `post_max_size`, and possibly proxy limits.
+
+#### Allowed MIME types
+
+Default allowlist:
+
+* `application/zip`
+* `image/jpeg`
+* `image/png`
+* `application/pdf`
+
+Override completely:
+
+```php
+add_filter('pfu_allowed_mime_types', function ($mimes) {
+    return [
+        'application/zip',
+        'application/pdf',
+        'image/jpeg',
+        'image/png',
+        'text/plain',
+    ];
+});
+```
+
+Or extend the defaults:
+
+```php
+add_filter('pfu_allowed_mime_types', function ($mimes) {
+    $mimes[] = 'text/plain';
+    $mimes[] = 'video/mp4';
+    return array_values(array_unique($mimes));
+});
+```
+**API behavior on violations**
+
+* Files exceeding the limit → **413 Payload Too Large**
+* Unsupported MIME types → **415 Unsupported Media Type**
+* Responses include a human-readable limit (e.g., `limitHuman: "50.00 MB"`)
 
 ---
 
@@ -143,17 +205,6 @@ wp-content/uploads/
 
 * The directory is created on first upload.
 * `index.html` is added to discourage directory listing (if enabled server-side).
-
----
-
-## Configuration & Hardening (next iterations)
-
-* Allowlist MIME types and maximum upload size (plugin options).
-* Optional HTTPS-only enforcement for REST requests.
-* Additional endpoints:
-
-  * `GET /files` (list files for the authenticated user)
-  * `DELETE /files/{filename}` (safe deletion with traversal protection)
 
 ---
 
