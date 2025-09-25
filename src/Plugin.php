@@ -75,19 +75,33 @@ class Plugin
             ],
         ]);
 
-        // GET /files  → lista dei file dell’utente
+        // GET /files  - lista dei file dell’utente
         register_rest_route(self::REST_NS, '/files', [
             [
                 'methods'  => 'GET',
                 'callback' => [__CLASS__, 'route_list_files'],
                 'permission_callback' => [__CLASS__, 'require_auth'],
                 'args' => [
-                    // opzionale: ?page=1&per_page=100 in futuro; per ora restituiamo tutto
+                    'page' => [
+                        'description' => 'Page number (1-based)',
+                        'type'        => 'integer',
+                        'required'    => false,
+                    ],
+                    'per_page' => [
+                        'description' => 'Items per page (1..1000)',
+                        'type'        => 'integer',
+                        'required'    => false,
+                    ],
+                    'order' => [
+                        'description' => 'Sort by modified time: desc|asc',
+                        'type'        => 'string',
+                        'required'    => false,
+                    ],
                 ],
             ],
         ]);
 
-        // DELETE /files/{filename} → cancella un file dell’utente
+        // DELETE /files/{filename} - cancella un file dell’utente
         register_rest_route(self::REST_NS, '/files/(?P<filename>[^/]+)', [
             [
                 'methods'  => 'DELETE',
@@ -102,7 +116,7 @@ class Plugin
             ],
         ]);
 
-        // HEAD /files/{filename} → metadata veloci via header (no body)
+        // HEAD /files/{filename} - metadata veloci via header (no body)
         register_rest_route(self::REST_NS, '/files/(?P<filename>[^/]+)', [
             [
                 'methods'  => 'HEAD',
@@ -174,12 +188,62 @@ class Plugin
             );
         }
 
+        // ---- Validazioni: max size + MIME allowlist ----
+        $size = isset($files['file']['size']) ? (int)$files['file']['size'] : 0;
+        $max  = self::get_max_upload_bytes();
+        if ($size <= 0) {
+            return new \WP_REST_Response(['ok' => false, 'error' => 'Empty upload or unknown size'], 400);
+        }
+        if ($size > $max) {
+            return new \WP_REST_Response([
+                'ok'    => false,
+                'error' => 'File too large',
+                'limit' => $max,
+                'limitHuman' => self::human_bytes($max),
+                'got'   => $size,
+                'gotHuman' => self::human_bytes($size),
+            ], 413); // Payload Too Large
+        }
+
+        // MIME detection: contenuto (finfo) → fallback su estensione → fallback header
+        $allowed = self::get_allowed_mime_types();
+        $mime = null;
+
+        // 1) dal contenuto
+        if (function_exists('finfo_open') && is_readable($files['file']['tmp_name'])) {
+            $f = finfo_open(FILEINFO_MIME_TYPE);
+            if ($f) {
+                $mime = finfo_file($f, $files['file']['tmp_name']) ?: null;
+                finfo_close($f);
+            }
+        }
+        // 2) dall’estensione
+        if ($mime === null) {
+            $ft = \wp_check_filetype((string)$files['file']['name']);
+            if ($ft && !empty($ft['type'])) {
+                $mime = $ft['type'];
+            }
+        }
+        // 3) dall’header del client (meno affidabile)
+        if ($mime === null && !empty($files['file']['type'])) {
+            $mime = (string)$files['file']['type'];
+        }
+
+        if ($mime === null || !in_array($mime, $allowed, true)) {
+            return new \WP_REST_Response([
+                'ok'        => false,
+                'error'     => 'Unsupported media type',
+                'mime'      => $mime,
+                'allowed'   => $allowed,
+                'hint'      => 'Allowed MIME types can be configured via the pfu_allowed_mime_types filter.',
+            ], 415); // Unsupported Media Type
+        }
+
         $user = wp_get_current_user();
         if (! $user || 0 === $user->ID) {
             return new \WP_REST_Response(['ok' => false, 'error' => 'Not authenticated'], 401);
         }
 
-        // ... il resto della funzione rimane uguale, ma usa $files['file'] al posto di $_FILES['file']:
         $username = sanitize_user($user->user_login, true);
         if (empty($username)) {
             $username = 'user-' . $user->ID;
@@ -245,52 +309,105 @@ class Plugin
         $dir  = $base['path'];
         $url  = $base['url'];
 
+        // Parametri
+        $page     = max(1, (int)($req->get_param('page') ?: 1));
+        $per_page = (int)($req->get_param('per_page') ?: 1000);
+        if ($per_page < 1) {
+            $per_page = 1;
+        }
+        if ($per_page > 1000) {
+            $per_page = 1000;
+        }
+        $order = strtolower((string)($req->get_param('order') ?: 'desc'));
+        if ($order !== 'asc' && $order !== 'desc') {
+            $order = 'desc';
+        }
+
         if (! is_dir($dir)) {
-            // Nessun file ancora
-            return new \WP_REST_Response(['ok' => true, 'items' => [], 'owner' => $base['username']]);
+            return new \WP_REST_Response([
+                'ok'          => true,
+                'items'       => [],
+                'owner'       => $base['username'],
+                'count'       => 0,
+                'page'        => $page,
+                'per_page'    => $per_page,
+                'total'       => 0,
+                'total_pages' => 0,
+                'order'       => $order,
+            ]);
         }
 
         $items = [];
         $dh = @opendir($dir);
         if ($dh) {
             while (false !== ($entry = readdir($dh))) {
-                // salta dotfiles e index.html
                 if ($entry === '.' || $entry === '..' || $entry === 'index.html' || strpos($entry, "\0") !== false) {
                     continue;
                 }
                 $abs = $dir . DIRECTORY_SEPARATOR . $entry;
                 if (\is_link($abs)) {
                     continue;
-                }  // niente symlink
-                if (is_file($abs)) {
-                    $size = @filesize($abs);
-                    $mtime = @filemtime($abs);
-                    $ft = \wp_check_filetype($entry);
-                    $mime = $ft && isset($ft['type']) ? $ft['type'] : null;
-
-                    $items[] = [
-                        'name' => $entry,
-                        'url'  => $url . '/' . rawurlencode($entry),
-                        'size' => is_int($size) ? $size : null,
-                        'mime' => $mime,
-                        'modified' => is_int($mtime) ? gmdate('c', $mtime) : null,
-                    ];
+                } // no symlink
+                if (! is_file($abs)) {
+                    continue;
                 }
+
+                $size  = @filesize($abs);
+                $mtime = @filemtime($abs);
+                $ft    = \wp_check_filetype($entry);
+                $mime  = $ft && isset($ft['type']) ? $ft['type'] : null;
+
+                $items[] = [
+                    'name'     => $entry,
+                    'url'      => $url . '/' . rawurlencode($entry),
+                    'size'     => is_int($size) ? $size : null,
+                    'mime'     => $mime,
+                    'modified' => is_int($mtime) ? $mtime : null, // timestamp
+                ];
             }
             closedir($dh);
         }
 
-        // Ordina per mtime desc (più recenti prima)
-        usort($items, function ($a, $b) {
-            return strcmp((string)$b['modified'], (string)$a['modified']);
+        // Ordina per mtime asc/desc; null va in coda
+        usort($items, function ($a, $b) use ($order) {
+            $am = $a['modified'] ?? 0;
+            $bm = $b['modified'] ?? 0;
+            if ($am === $bm) return 0;
+            return ($order === 'asc')
+                ? (($am < $bm) ? -1 : 1)
+                : (($am > $bm) ? -1 : 1);
         });
 
-        return new \WP_REST_Response([
-            'ok'    => true,
-            'items' => $items,
-            'owner' => $base['username'],
-            'count' => count($items),
+        $total = count($items);
+        $total_pages = (int) ceil($total / $per_page);
+        if ($page > $total_pages && $total_pages > 0) {
+            $page = $total_pages;
+        }
+        $offset = ($page - 1) * $per_page;
+        $paged_items = array_slice($items, $offset, $per_page);
+
+        /* Converti modified in ISO8601 per output
+        foreach ($paged_items as &$it) {
+           $it['modified'] = is_int($it['modified']) ? gmdate('c', $it['modified']) : null;
+        }*/
+           
+        $resp = new \WP_REST_Response([
+            'ok'          => true,
+            'items'       => $paged_items,
+            'owner'       => $base['username'],
+            'count'       => $total,
+            'page'        => $page,
+            'per_page'    => $per_page,
+            'total'       => $total,
+            'total_pages' => $total_pages,
+            'order'       => $order,
         ]);
+
+        // (facoltativo) intestazioni pagination-like
+        $resp->header('X-Total-Count', (string)$total);
+        $resp->header('X-Total-Pages', (string)$total_pages);
+
+        return $resp;
     }
 
     /** DELETE /files/{filename} — cancella un file nella cartella dell’utente */
