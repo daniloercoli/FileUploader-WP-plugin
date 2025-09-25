@@ -12,6 +12,46 @@ class Plugin
     const SLUG      = 'private-file-uploader';
     const SUB_BASE  = 'media/private-file-uploader'; // sotto uploads/
 
+    // Valori di default; sovrascrivibili via filter (vedi sotto)
+    const DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
+    const DEFAULT_ALLOWED_MIME = [
+        'application/zip',
+        'image/jpeg',
+        'image/png',
+        'application/pdf',
+    ];
+
+    // Recupera il limite massimo (byte) – configurabile con filtro 'pfu_max_upload_bytes'
+    private static function get_max_upload_bytes(): int
+    {
+        $max = (int) apply_filters('pfu_max_upload_bytes', self::DEFAULT_MAX_UPLOAD_BYTES);
+        return $max > 0 ? $max : self::DEFAULT_MAX_UPLOAD_BYTES;
+    }
+
+    // Recupera allowlist MIME – configurabile con filtro 'pfu_allowed_mime_types'
+    /** @return array<string> */
+    private static function get_allowed_mime_types(): array
+    {
+        $m = apply_filters('pfu_allowed_mime_types', self::DEFAULT_ALLOWED_MIME);
+        if (!is_array($m) || empty($m)) {
+            return self::DEFAULT_ALLOWED_MIME;
+        }
+        // normalizza
+        return array_values(array_unique(array_filter(array_map('strval', $m))));
+    }
+
+    private static function human_bytes(int $bytes): string
+    {
+        $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        $i = 0;
+        $n = $bytes;
+        while ($n >= 1024 && $i < count($units) - 1) {
+            $n /= 1024;
+            $i++;
+        }
+        return sprintf('%s %s', ($i === 0 ? (string)$n : number_format($n, 2)), $units[$i]);
+    }
+
     public static function init(): void
     {
         add_action('rest_api_init', [__CLASS__, 'register_routes']);
@@ -219,7 +259,9 @@ class Plugin
                     continue;
                 }
                 $abs = $dir . DIRECTORY_SEPARATOR . $entry;
-                if ( \is_link( $abs ) ) { continue; }  // niente symlink
+                if (\is_link($abs)) {
+                    continue;
+                }  // niente symlink
                 if (is_file($abs)) {
                     $size = @filesize($abs);
                     $mtime = @filemtime($abs);
