@@ -2,15 +2,17 @@
 
 namespace PFU;
 
-if (! defined('ABSPATH')) {
+if (!defined('ABSPATH')) {
     exit;
 }
 
 class Admin
 {
-
     const OPTION_KEY = 'pfu_settings';
 
+    /**
+     * Initialize admin hooks
+     */
     public static function init(): void
     {
         \add_action('admin_menu', [__CLASS__, 'register_menu']);
@@ -18,19 +20,22 @@ class Admin
         \add_action('admin_post_pfu_delete_file', [__CLASS__, 'handle_delete_file']);
         \add_action('admin_post_pfu_safe_deactivate_handle', [__CLASS__, 'handle_safe_deactivate']);
 
-        \add_action('load-users.php', [__CLASS__, 'maybe_hook_users_notice']);          // single site
-       
+        // User deletion hooks (single site)
+        \add_action('load-users.php', [__CLASS__, 'maybe_hook_users_notice']);
         \add_action('delete_user_form', [__CLASS__, 'delete_user_form'], 10, 1);
         \add_action('delete_user', [__CLASS__, 'handle_delete_user'], 10, 1);
-        // Multisite (se usi network)
+
+        // Multisite user deletion
         \add_action('wpmu_delete_user', [__CLASS__, 'handle_delete_user'], 10, 1);
     }
 
-    /** Menu: voce principale + sottovoci (Library per tutti, Settings per admin) */
+    /**
+     * Register admin menu: main page + subpages (Library for all, Settings for admins)
+     */
     public static function register_menu(): void
     {
-        $capLibrary  = 'read';             // tutti gli utenti loggati
-        $capSettings = 'manage_options';   // solo admin
+        $capLibrary  = 'read';             // all logged-in users
+        $capSettings = 'manage_options';   // admins only
 
         \add_menu_page(
             __('Private Uploader', 'pfu'),
@@ -42,7 +47,7 @@ class Admin
             27
         );
 
-        // Sub: Overview (replica, così compare anche come sotto-voce)
+        // Sub: Overview (duplicate so it appears as submenu)
         \add_submenu_page(
             'pfu-overview',
             __('Overview', 'pfu'),
@@ -52,7 +57,7 @@ class Admin
             [__CLASS__, 'render_overview_page']
         );
 
-        // Sub: Library (lista file utente)
+        // Sub: Library (user's file list)
         \add_submenu_page(
             'pfu-overview',
             __('Library', 'pfu'),
@@ -62,7 +67,7 @@ class Admin
             [__CLASS__, 'render_library_page']
         );
 
-        // Settings (solo admin)
+        // Sub: Settings (admins only)
         \add_submenu_page(
             'pfu-overview',
             __('Settings', 'pfu'),
@@ -72,7 +77,7 @@ class Admin
             [__CLASS__, 'render_settings_page']
         );
 
-        // Hidden page: Safe Deactivate (only admins)
+        // Hidden page: Safe Deactivate (admins only)
         \add_submenu_page(
             'pfu-overview',
             __('Safe Deactivate', 'pfu'),
@@ -82,13 +87,15 @@ class Admin
             [__CLASS__, 'render_safe_deactivate_page']
         );
 
-        // Hide from the sidebar but keep it routable
+        // Hide from sidebar but keep it routable
         \add_action('admin_head', function () {
             \remove_submenu_page('pfu-overview', 'pfu-safe-deactivate');
         });
     }
 
-    /** Registra impostazioni (pfu_settings) */
+    /**
+     * Register plugin settings (pfu_settings)
+     */
     public static function register_settings(): void
     {
         \register_setting(
@@ -123,6 +130,11 @@ class Admin
         );
     }
 
+    /**
+     * Get plugin settings with defaults
+     *
+     * @return array Settings array
+     */
     public static function get_settings(): array
     {
         $opt = \get_option(self::OPTION_KEY, []);
@@ -130,18 +142,27 @@ class Admin
             'max_upload_bytes'  => Plugin::DEFAULT_MAX_UPLOAD_BYTES,
             'allowed_mime_types' => Plugin::DEFAULT_ALLOWED_MIME,
         ];
-        // normalizza
+
+        // Normalize max_upload_bytes
         $opt['max_upload_bytes'] = isset($opt['max_upload_bytes']) ? (int) $opt['max_upload_bytes'] : $defaults['max_upload_bytes'];
+
+        // Normalize allowed_mime_types
         $mime = $opt['allowed_mime_types'] ?? $defaults['allowed_mime_types'];
         if (is_string($mime)) {
             $mime = preg_split('/\R+/', $mime) ?: [];
         }
         $mime = array_values(array_unique(array_filter(array_map('strval', (array)$mime))));
         $opt['allowed_mime_types'] = $mime ?: $defaults['allowed_mime_types'];
+
         return $opt + $defaults;
     }
 
-    /** Sanitize dell’array option */
+    /**
+     * Sanitize the settings array
+     *
+     * @param mixed $input Raw input from form
+     * @return array Sanitized settings
+     */
     public static function sanitize_settings($input): array
     {
         $out = [];
@@ -174,8 +195,9 @@ class Admin
         return $out;
     }
 
-    // ----- Settings fields render -----
-
+    /**
+     * Render max upload bytes field
+     */
     public static function field_max_upload_bytes(): void
     {
         $opt = self::get_settings();
@@ -187,6 +209,9 @@ class Admin
         echo '<p class="description">' . esc_html__('Example: 52428800 for 50 MB', 'pfu') . '</p>';
     }
 
+    /**
+     * Render allowed MIME types field
+     */
     public static function field_allowed_mime_types(): void
     {
         $opt = self::get_settings();
@@ -199,10 +224,12 @@ class Admin
         echo '<p class="description">' . esc_html__('One MIME per line, e.g. application/zip', 'pfu') . '</p>';
     }
 
-    // ----- Safe deactivate page -----
+    /**
+     * Render Safe Deactivate page
+     */
     public static function render_safe_deactivate_page(): void
     {
-        if (! \current_user_can('manage_options')) {
+        if (!\current_user_can('manage_options')) {
             \wp_die(esc_html__('You do not have permission to access this page.', 'pfu'));
         }
 
@@ -213,7 +240,7 @@ class Admin
 
         $nonce = \wp_create_nonce('pfu_safe_deactivate');
 
-        echo '<div class="wrap"><h1>' . esc_html__('Safe Deactivate — Private Uploader', 'pfu') . '</h1>';
+        echo '<div class="wrap"><h1>' . esc_html__('Safe Deactivate – Private Uploader', 'pfu') . '</h1>';
 
         if (!$exists) {
             echo '<p class="description">' . esc_html__('Storage directory not found; nothing to clean.', 'pfu') . '</p>';
@@ -283,26 +310,28 @@ class Admin
         echo '</form></div>';
     }
 
-    // ----- Overview page -----
+    /**
+     * Render Overview page
+     */
     public static function render_overview_page(): void
     {
-        if (! \is_user_logged_in()) {
+        if (!\is_user_logged_in()) {
             \wp_die(esc_html__('You must be logged in.', 'pfu'));
         }
 
-        // Valori effettivi (defaults → options → filters)
+        // Get effective values (defaults → options → filters)
         $maxBytes = Plugin::effective_max_upload_bytes();
         $mimes    = Plugin::effective_allowed_mime_types();
 
         echo '<div class="wrap">';
-        echo '<h1>' . esc_html__('Private Uploader — Overview', 'pfu') . '</h1>';
+        echo '<h1>' . esc_html__('Private Uploader – Overview', 'pfu') . '</h1>';
 
         echo '<p>' . esc_html__(
             'This plugin lets you upload files to your private area on this site. The rules below apply to uploads performed via the mobile app or REST API.',
             'pfu'
         ) . '</p>';
 
-        // Stili minimi
+        // Minimal styles
         echo '<style>
       .pfu-cards{display:flex;gap:16px;flex-wrap:wrap;margin:16px 0}
       .pfu-card{background:#fff;border:1px solid #e3e3e3;border-radius:8px;padding:16px;min-width:260px}
@@ -341,20 +370,19 @@ class Admin
         echo '<p class="pfu-muted">' . esc_html__('Uploads with unsupported types will be rejected.', 'pfu') . '</p>';
         echo '</div>';
 
-        // --- Server-side limits card ---
-        // Policy del plugin (soglia che vuoi raggiungere)
-        $policyMax = method_exists('\\PFU\\Plugin', 'effective_max_upload_bytes')
-            ? \PFU\Plugin::effective_max_upload_bytes()
-            : (defined('\\PFU\\Plugin::DEFAULT_MAX_UPLOAD_BYTES') ? \PFU\Plugin::DEFAULT_MAX_UPLOAD_BYTES : 0);
+        echo '</div>'; // .pfu-cards
 
-        // Valori php.ini letti a runtime
+        // Server-side limits card
+        $policyMax = Plugin::effective_max_upload_bytes();
+
+        // Read php.ini values at runtime
         list($upHuman,  $upBytes,  $upRaw)  = self::ini_pair('upload_max_filesize');
         list($postHuman, $postBytes, $postRaw) = self::ini_pair('post_max_size');
         list($memHuman, $memBytes, $memRaw) = self::ini_pair('memory_limit');
         $maxUploads = @ini_get('max_file_uploads');
         $execTime   = @ini_get('max_execution_time');
 
-        // Colori/avvisi se i limiti PHP sono più bassi della policy che desideri
+        // Warnings if PHP limits are lower than policy
         $warns = [];
         if ($policyMax > 0 && $upBytes  > 0 && $upBytes  < $policyMax) $warns[] = 'upload_max_filesize';
         if ($policyMax > 0 && $postBytes > 0 && $postBytes < $policyMax) $warns[] = 'post_max_size';
@@ -395,7 +423,7 @@ class Admin
         );
         echo '</tbody></table>';
 
-        // Nota esplicativa + warning
+        // Explanatory note + warning
         echo '<p class="pfu-muted" style="margin-top:8px">';
         echo esc_html__('Note: PHP/server limits must also allow the requested size. If uploads fail for large files, raise both upload_max_filesize and post_max_size (and check web server/proxy limits).', 'pfu');
         echo '</p>';
@@ -406,17 +434,14 @@ class Admin
             echo esc_html__('Your PHP limits are below the plugin policy. Increase the following:', 'pfu') . ' ';
             echo '<code>' . esc_html(implode(', ', $warns)) . '</code>';
             if ($policyMax > 0) {
-                echo ' — ' . esc_html__('desired at least', 'pfu') . ': <strong>' . esc_html(self::human_size((int)$policyMax)) . '</strong>';
+                echo ' – ' . esc_html__('desired at least', 'pfu') . ': <strong>' . esc_html(self::human_size((int)$policyMax)) . '</strong>';
             }
             echo '</div>';
         }
 
         echo '</div>'; // card
 
-
-        echo '</div>'; // .pfu-cards
-
-        // Link utili
+        // Useful links
         echo '<div class="pfu-actions">';
         echo '<a class="button button-primary" href="' . esc_url(\admin_url('admin.php?page=pfu-library')) . '">'
             . esc_html__('Open your Library', 'pfu') . '</a> ';
@@ -430,11 +455,12 @@ class Admin
         echo '</div>'; // .wrap
     }
 
-
-    // ----- Library page -----
+    /**
+     * Render Library page
+     */
     public static function render_library_page(): void
     {
-        if (! \is_user_logged_in()) {
+        if (!\is_user_logged_in()) {
             \wp_die(esc_html__('You must be logged in.', 'pfu'));
         }
 
@@ -450,7 +476,7 @@ class Admin
             .pfu-icon{width:36px;height:36px;opacity:.85;display:block;margin:6px auto}
             </style>';
 
-        if (! is_dir($dir)) {
+        if (!is_dir($dir)) {
             echo '<p>' . esc_html__('You have not uploaded any files yet.', 'pfu') . '</p></div>';
             return;
         }
@@ -509,17 +535,17 @@ class Admin
             $is_image = (strpos((string)$r['mime'], 'image/') === 0);
             $preview_html = '';
             if ($is_image) {
-                // Usa direttamente l’URL del file come thumbnail "soft" (non abbiamo attachment ID)
+                // Use the file URL directly as a "soft" thumbnail (we don't have attachment ID)
                 $preview_html = sprintf(
                     '<a href="%s" target="_blank" rel="noopener"><img class="pfu-thumb" src="%s" alt="" loading="lazy" /></a>',
                     esc_url($r['url']),
                     esc_url($r['url'])
                 );
             } else {
-                // Icona predefinita WordPress per il MIME
+                // WordPress default icon for MIME type
                 $icon = \wp_mime_type_icon((string)$r['mime']);
                 if (empty($icon)) {
-                    // fallback generico
+                    // Generic fallback
                     $icon = \wp_mime_type_icon('application/octet-stream');
                 }
                 $preview_html = sprintf(
@@ -552,10 +578,12 @@ class Admin
         echo '</tbody></table></div>';
     }
 
-    /** Azione admin-post per cancellare un file dell’utente corrente (no JS necessario) */
+    /**
+     * Handle file deletion (admin-post action, no JS needed)
+     */
     public static function handle_delete_file(): void
     {
-        if (! \is_user_logged_in()) {
+        if (!\is_user_logged_in()) {
             \wp_die(esc_html__('You must be logged in.', 'pfu'));
         }
 
@@ -563,7 +591,7 @@ class Admin
         $file = isset($_GET['file']) ? (string)$_GET['file'] : '';
         $nonce = isset($_GET['_wpnonce']) ? (string)$_GET['_wpnonce'] : '';
 
-        if (! \wp_verify_nonce($nonce, 'pfu_del_' . $file)) {
+        if (!\wp_verify_nonce($nonce, 'pfu_del_' . $file)) {
             \wp_die(esc_html__('Invalid nonce.', 'pfu'));
         }
 
@@ -575,12 +603,12 @@ class Admin
         $paths = Plugin::get_user_base($user);
         $abs   = $paths['path'] . DIRECTORY_SEPARATOR . $baseFile;
 
-        if (! file_exists($abs) || ! is_file($abs)) {
+        if (!file_exists($abs) || !is_file($abs)) {
             \wp_redirect(\admin_url('admin.php?page=pfu-library&pfu_msg=notfound'));
             exit;
         }
 
-        if (! Plugin::path_within_base($paths['path'], $abs) || \is_link($abs)) {
+        if (!Plugin::path_within_base($paths['path'], $abs) || \is_link($abs)) {
             \wp_die(esc_html__('Invalid path.', 'pfu'));
         }
 
@@ -590,9 +618,12 @@ class Admin
         exit;
     }
 
+    /**
+     * Handle safe deactivation
+     */
     public static function handle_safe_deactivate(): void
     {
-        if (! \current_user_can('manage_options')) {
+        if (!\current_user_can('manage_options')) {
             \wp_die(esc_html__('You do not have permission.', 'pfu'));
         }
         \check_admin_referer('pfu_safe_deactivate');
@@ -604,7 +635,7 @@ class Admin
             self::rrmdir($root);
             $msg = 'pfu_deleted';
         } else {
-            // write deny rules for Apache/IIS if possible
+            // Write deny rules for Apache/IIS if possible
             if (is_dir($root) && is_writable($root)) {
                 @file_put_contents(trailingslashit($root) . '.htaccess', "Options -Indexes\nRequire all denied\n");
                 @file_put_contents(trailingslashit($root) . 'web.config', "<configuration>\n  <system.webServer>\n    <security>\n      <authorization>\n        <remove users=\"*\" roles=\"\" verbs=\"\" />\n        <add accessType=\"Deny\" users=\"*\" />\n      </authorization>\n    </security>\n    <directoryBrowse enabled=\"false\" />\n  </system.webServer>\n</configuration>\n");
@@ -621,7 +652,11 @@ class Admin
         exit;
     }
 
-    /** Recursive delete of a directory */
+    /**
+     * Recursive delete of a directory
+     *
+     * @param string $dir Directory path
+     */
     private static function rrmdir(string $dir): void
     {
         if (!is_dir($dir)) return;
@@ -643,15 +678,15 @@ class Admin
         @rmdir($dir);
     }
 
-
-    // ----- Settings page render -----
-
+    /**
+     * Render Settings page
+     */
     public static function render_settings_page(): void
     {
-        if (! \current_user_can('manage_options')) {
+        if (!\current_user_can('manage_options')) {
             \wp_die(esc_html__('You do not have permission to access this page.', 'pfu'));
         }
-        echo '<div class="wrap"><h1>' . esc_html__('Private Uploader — Settings', 'pfu') . '</h1>';
+        echo '<div class="wrap"><h1>' . esc_html__('Private Uploader – Settings', 'pfu') . '</h1>';
         echo '<form method="post" action="options.php">';
         \settings_fields('pfu_settings_group');
         \do_settings_sections('pfu-settings');
@@ -659,6 +694,12 @@ class Admin
         echo '</form></div>';
     }
 
+    /**
+     * Convert bytes to human-readable format
+     *
+     * @param int $bytes Number of bytes
+     * @return string Human-readable size
+     */
     private static function human_size(int $bytes): string
     {
         $u = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -671,12 +712,17 @@ class Admin
         return ($i === 0) ? "$n {$u[$i]}" : number_format($n, 2) . " {$u[$i]}";
     }
 
-    /** Converte shorthand INI (es. "128M", "2G") in bytes */
+    /**
+     * Convert shorthand INI notation (e.g. "128M", "2G") to bytes
+     *
+     * @param mixed $val INI value
+     * @return int Bytes
+     */
     private static function ini_bytes($val): int
     {
         if ($val === null || $val === '') return 0;
         $v = trim((string)$val);
-        if ($v === '-1') return PHP_INT_MAX; // illimitato
+        if ($v === '-1') return PHP_INT_MAX; // unlimited
         if (preg_match('/^\d+$/', $v)) return (int)$v;
         if (!preg_match('/^\s*([0-9\.]+)\s*([KMGkmg])\s*$/', $v, $m)) return (int)$v;
         $n = (float)$m[1];
@@ -694,7 +740,12 @@ class Admin
         return (int)round($n);
     }
 
-    /** Ritorna una coppia [human, bytes] pronta da mostrare */
+    /**
+     * Get INI value as [human_readable, bytes, raw_value] tuple
+     *
+     * @param string $key INI key
+     * @return array [human_readable, bytes, raw_value]
+     */
     private static function ini_pair(string $key): array
     {
         $raw = @ini_get($key);
@@ -703,42 +754,42 @@ class Admin
         return [$human, $bytes, (string)$raw];
     }
 
-    /* --- Cancellazione utente ---- */
+    /**
+     * Render user deletion form options
+     *
+     * @param \WP_User $user User being deleted
+     */
     public static function delete_user_form($user): void
     {
-        if (! \current_user_can('delete_users')) return;
+        if (!\current_user_can('delete_users')) return;
 
         $nonce = \wp_create_nonce('pfu_delete_user_files_' . (int)$user->ID);
 
-        echo '<h2>' . esc_html__('Private Uploader — User files', 'pfu') . '</h2>';
-        echo '<p>' . esc_html__('Choose what to do with this user’s uploaded files.', 'pfu') . '</p>';
+        echo '<h2>' . esc_html__('Private Uploader – User files', 'pfu') . '</h2>';
+        echo '<p>' . esc_html__('Choose what to do with this user\'s uploaded files.', 'pfu') . '</p>';
 
         echo '<input type="hidden" name="pfu_nonce" value="' . esc_attr($nonce) . '" />';
 
         echo '<fieldset class="pfu-box" style="border:1px solid #ccd0d4;padding:12px;max-width:680px;background:#fff">';
         echo '<label style="display:block;margin-bottom:8px">';
         echo '<input type="radio" name="pfu_user_files_action" value="delete" /> ';
-        echo '<strong>' . esc_html__('Delete all files', 'pfu') . '</strong> — ';
-        echo esc_html__('remove this user’s storage directory permanently.', 'pfu');
+        echo '<strong>' . esc_html__('Delete all files', 'pfu') . '</strong> – ';
+        echo esc_html__('remove this user\'s storage directory permanently.', 'pfu');
         echo '</label>';
 
         echo '<label style="display:block;margin-bottom:8px">';
         echo '<input type="radio" name="pfu_user_files_action" value="reassign" checked /> ';
-        echo '<strong>' . esc_html__('Reassign to another user', 'pfu') . '</strong> — ';
+        echo '<strong>' . esc_html__('Reassign to another user', 'pfu') . '</strong> – ';
         echo esc_html__('move the storage directory to the selected user.', 'pfu');
         echo '<br />';
-        // Calcola gli ID da escludere (utente singolo o bulk)
+
+        // Calculate IDs to exclude (single user or bulk)
         $exclude_ids = [];
 
-        /* if ($user instanceof \WP_User) {
-            $exclude_ids[] = (int) $user->ID; // utente mostrato nel form
-        }*/
-
-        // In bulk delete, WordPress passa gli ID in request
         if (isset($_REQUEST['user'])) {
             $exclude_ids[] = (int) $_REQUEST['user'];
         }
-        if (! empty($_REQUEST['users']) && is_array($_REQUEST['users'])) {
+        if (!empty($_REQUEST['users']) && is_array($_REQUEST['users'])) {
             foreach ($_REQUEST['users'] as $uid) {
                 $exclude_ids[] = (int) $uid;
             }
@@ -746,56 +797,61 @@ class Admin
 
         $exclude_ids = array_values(array_unique(array_filter($exclude_ids, fn($n) => $n > 0)));
 
-        // Valore “nessuna selezione”
+        // "No selection" value
         $none_value = '0';
 
-        // Dropdown utenti: niente selezione di default, escludi gli ID in cancellazione
+        // User dropdown: no default selection, exclude IDs being deleted
         \wp_dropdown_users([
             'name'               => 'pfu_reassign_user',
-            'selected'           => $none_value,                 // non selezionare l’utente corrente
+            'selected'           => $none_value,
             'option_none_value'  => $none_value,
             'show_option_none'   => __('— Select user —', 'pfu'),
-            'exclude'            => $exclude_ids,                // escludi utenti in cancellazione
+            'exclude'            => $exclude_ids,
             'orderby'            => 'user_login',
             'order'              => 'ASC',
             'show'               => 'user_login',
-            'include_selected'   => true,                        // mostra l’opzione “none” selezionata
-            'who'                => '',                          // tutti gli utenti
+            'include_selected'   => true,
+            'who'                => '',
         ]);
 
         echo '</label>';
 
-        // Suggerimenti deny
+        // Keep with deny option
         echo '<label style="display:block;margin-bottom:8px">';
         echo '<input type="radio" name="pfu_user_files_action" value="keep_deny" /> ';
-        echo '<strong>' . esc_html__('Keep files (no automatic blocking)', 'pfu') . '</strong> — ';
+        echo '<strong>' . esc_html__('Keep files (no automatic blocking)', 'pfu') . '</strong> – ';
         echo esc_html__('keep files on disk. You must manually add web server rules to block access (Apache/Nginx/IIS).', 'pfu');
         echo '</label>';
 
         echo '</fieldset>';
     }
 
+    /**
+     * Handle user deletion and process file actions
+     *
+     * @param int $user_id User ID being deleted
+     */
     public static function handle_delete_user(int $user_id): void
     {
-        if (! \current_user_can('delete_users')) return;
+        if (!\current_user_can('delete_users')) return;
 
         $action = isset($_POST['pfu_user_files_action']) ? (string)$_POST['pfu_user_files_action'] : '';
         $nonce  = isset($_POST['pfu_nonce']) ? (string)$_POST['pfu_nonce'] : '';
-        if (empty($action) || ! \wp_verify_nonce($nonce, 'pfu_delete_user_files_' . (int)$user_id)) {
-            return; // nessuna scelta o nonce mancante → non toccare nulla
+        if (empty($action) || !\wp_verify_nonce($nonce, 'pfu_delete_user_files_' . (int)$user_id)) {
+            return; // no choice or missing nonce → don't touch anything
         }
 
         $user = \get_user_by('id', $user_id);
-        if (! $user) return;
+        if (!$user) return;
 
         $root = \PFU\Plugin::storage_root_base();
         $src  = $root . DIRECTORY_SEPARATOR . $user->user_login;
 
-        if (! is_dir($src)) return; // niente storage → nulla da fare
+        if (!is_dir($src)) return; // no storage → nothing to do
 
         if ($action === 'delete') {
             self::rrmdir($src);
-            set_transient('pfu_notice_users', 'kept_manual_rules', 60);
+            set_transient('pfu_notice_users', 'deleted_ok', 60);
             return;
         }
 
@@ -805,7 +861,7 @@ class Admin
             if ($to && $to->user_login) {
                 $dst = $root . DIRECTORY_SEPARATOR . $to->user_login;
 
-                // Se esiste già, unisci in sottocartella o rinomina con suffisso
+                // If destination exists, merge into subfolder or rename with suffix
                 if (is_dir($dst)) {
                     $suffix = '-' . gmdate('YmdHis');
                     $dst = $dst . $suffix;
@@ -818,18 +874,22 @@ class Admin
         }
 
         if ($action === 'keep_deny') {
-            // NON scriviamo regole automaticamente. Mostreremo un avviso dopo il redirect.
-            set_transient('pfu_notice_users', 'kept_manual_rules', 60); // dura 60s, sufficiente per il redirect
+            // Don't write rules automatically. Show a notice after redirect.
+            set_transient('pfu_notice_users', 'kept_manual_rules', 60);
             return;
         }
     }
 
+    /**
+     * Hook to display admin notices on users.php after user deletion
+     */
     public static function maybe_hook_users_notice(): void
     {
-        // Eseguito solo quando si sta caricando users.php
+        // Only execute when loading users.php
         $code = get_transient('pfu_notice_users');
-        if (! $code) return;
-        // Registra il notice solo per questa richiesta, poi cancella il transient
+        if (!$code) return;
+
+        // Register notice for this request only, then delete transient
         add_action('admin_notices', function () use ($code) {
             if ($code === 'kept_manual_rules') {
                 echo '<div class="notice notice-warning is-dismissible"><p>'
