@@ -18,9 +18,8 @@ class Admin
         \add_action('admin_post_pfu_delete_file', [__CLASS__, 'handle_delete_file']);
         \add_action('admin_post_pfu_safe_deactivate_handle', [__CLASS__, 'handle_safe_deactivate']);
 
-        \add_action('admin_notices', [__CLASS__, 'plugins_screen_notice']);
-        \add_action('admin_notices', [__CLASS__, 'users_screen_notice']);
-
+        \add_action('load-users.php', [__CLASS__, 'maybe_hook_users_notice']);          // single site
+       
         \add_action('delete_user_form', [__CLASS__, 'delete_user_form'], 10, 1);
         \add_action('delete_user', [__CLASS__, 'handle_delete_user'], 10, 1);
         // Multisite (se usi network)
@@ -622,24 +621,6 @@ class Admin
         exit;
     }
 
-    public static function plugins_screen_notice(): void
-    {
-        if (! isset($_GET['pfu_notice']) || ! function_exists('get_current_screen')) return;
-        $screen = get_current_screen();
-        if (! $screen || $screen->base !== 'plugins') return;
-
-        $code = sanitize_text_field((string) $_GET['pfu_notice']);
-        if ($code === 'pfu_deleted') {
-            echo '<div class="notice notice-success is-dismissible"><p>'
-                . esc_html__('Private Uploader: all files were deleted and the plugin was deactivated.', 'pfu')
-                . '</p></div>';
-        } elseif ($code === 'pfu_denied') {
-            echo '<div class="notice notice-warning is-dismissible"><p>'
-                . esc_html__('Private Uploader: deny rules were written (Apache/IIS) and the plugin was deactivated. For Nginx, add the suggested location block.', 'pfu')
-                . '</p></div>';
-        }
-    }
-
     /** Recursive delete of a directory */
     private static function rrmdir(string $dir): void
     {
@@ -749,7 +730,7 @@ class Admin
         // Calcola gli ID da escludere (utente singolo o bulk)
         $exclude_ids = [];
 
-       /* if ($user instanceof \WP_User) {
+        /* if ($user instanceof \WP_User) {
             $exclude_ids[] = (int) $user->ID; // utente mostrato nel form
         }*/
 
@@ -814,6 +795,7 @@ class Admin
 
         if ($action === 'delete') {
             self::rrmdir($src);
+            set_transient('pfu_notice_users', 'kept_manual_rules', 60);
             return;
         }
 
@@ -831,6 +813,7 @@ class Admin
 
                 @rename($src, $dst);
             }
+            set_transient('pfu_notice_users', 'reassigned_ok', 60);
             return;
         }
 
@@ -840,21 +823,29 @@ class Admin
             return;
         }
     }
-    public static function users_screen_notice(): void
-    {
-        if (! function_exists('get_current_screen')) return;
-        $screen = get_current_screen();
-        if (! $screen || $screen->base !== 'users') return;
 
+    public static function maybe_hook_users_notice(): void
+    {
+        // Eseguito solo quando si sta caricando users.php
         $code = get_transient('pfu_notice_users');
         if (! $code) return;
+        // Registra il notice solo per questa richiesta, poi cancella il transient
+        add_action('admin_notices', function () use ($code) {
+            if ($code === 'kept_manual_rules') {
+                echo '<div class="notice notice-warning is-dismissible"><p>'
+                    . esc_html__('Private Uploader: files were kept. Please add deny rules to your web server manually (Apache/Nginx/IIS) to block public access.', 'pfu')
+                    . '</p></div>';
+            } elseif ($code === 'reassigned_ok') {
+                echo '<div class="notice notice-success is-dismissible"><p>'
+                    . esc_html__('Private Uploader: user files have been reassigned.', 'pfu')
+                    . '</p></div>';
+            } elseif ($code === 'deleted_ok') {
+                echo '<div class="notice notice-success is-dismissible"><p>'
+                    . esc_html__('Private Uploader: user files have been deleted.', 'pfu')
+                    . '</p></div>';
+            }
+        }, 1);
 
         delete_transient('pfu_notice_users');
-
-        if ($code === 'kept_manual_rules') {
-            echo '<div class="notice notice-warning is-dismissible"><p>'
-                . esc_html__('Private Uploader: files were kept. Please add deny rules to your web server manually (Apache/Nginx/IIS) to block public access.', 'pfu')
-                . '</p></div>';
-        }
     }
 }
