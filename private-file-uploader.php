@@ -7,10 +7,14 @@
  * License: MIT
  */
 
-if ( ! defined( 'ABSPATH' ) ) { exit; }
+if (! defined('ABSPATH')) {
+    exit;
+}
 
 require_once __DIR__ . '/src/Plugin.php';
+require_once __DIR__ . '/src/Admin.php';
 
-add_action( 'plugins_loaded', function () {
+add_action('plugins_loaded', function () {
     \PFU\Plugin::init();
-} );
+    \PFU\Admin::init();
+});

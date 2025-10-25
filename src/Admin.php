@@ -1,0 +1,440 @@
+<?php
+
+namespace PFU;
+
+if (! defined('ABSPATH')) {
+    exit;
+}
+
+class Admin
+{
+
+    const OPTION_KEY = 'pfu_settings';
+
+    public static function init(): void
+    {
+        \add_action('admin_menu', [__CLASS__, 'register_menu']);
+        \add_action('admin_init', [__CLASS__, 'register_settings']);
+        \add_action('admin_post_pfu_delete_file', [__CLASS__, 'handle_delete_file']);
+    }
+
+    /** Menu: voce principale + sottovoci (Library per tutti, Settings per admin) */
+    public static function register_menu(): void
+    {
+        $capLibrary  = 'read';             // tutti gli utenti loggati
+        $capSettings = 'manage_options';   // solo admin
+
+        \add_menu_page(
+            __('Private Uploader', 'pfu'),
+            __('Private Uploader', 'pfu'),
+            $capLibrary,
+            'pfu-overview',
+            [__CLASS__, 'render_overview_page'],
+            'dashicons-upload',
+            27
+        );
+
+        // Sub: Overview (replica, così compare anche come sotto-voce)
+        \add_submenu_page(
+            'pfu-overview',
+            __('Overview', 'pfu'),
+            __('Overview', 'pfu'),
+            $capLibrary,
+            'pfu-overview',
+            [__CLASS__, 'render_overview_page']
+        );
+
+        // Sub: Library (lista file utente)
+        \add_submenu_page(
+            'pfu-overview',
+            __('Library', 'pfu'),
+            __('Library', 'pfu'),
+            $capLibrary,
+            'pfu-library',
+            [__CLASS__, 'render_library_page']
+        );
+
+        // Settings (solo admin)
+        \add_submenu_page(
+            'pfu-overview',
+            __('Settings', 'pfu'),
+            __('Settings', 'pfu'),
+            $capSettings,
+            'pfu-settings',
+            [__CLASS__, 'render_settings_page']
+        );
+    }
+
+    /** Registra impostazioni (pfu_settings) */
+    public static function register_settings(): void
+    {
+        \register_setting(
+            'pfu_settings_group',
+            self::OPTION_KEY,
+            ['sanitize_callback' => [__CLASS__, 'sanitize_settings']]
+        );
+
+        \add_settings_section(
+            'pfu_main',
+            __('Upload policy', 'pfu'),
+            function () {
+                echo '<p>' . esc_html__('Configure max size and MIME allowlist for uploads handled by this plugin.', 'pfu') . '</p>';
+            },
+            'pfu-settings'
+        );
+
+        \add_settings_field(
+            'max_upload_bytes',
+            __('Max upload size (bytes)', 'pfu'),
+            [__CLASS__, 'field_max_upload_bytes'],
+            'pfu-settings',
+            'pfu_main'
+        );
+
+        \add_settings_field(
+            'allowed_mime_types',
+            __('Allowed MIME types (one per line)', 'pfu'),
+            [__CLASS__, 'field_allowed_mime_types'],
+            'pfu-settings',
+            'pfu_main'
+        );
+    }
+
+    public static function get_settings(): array
+    {
+        $opt = \get_option(self::OPTION_KEY, []);
+        $defaults = [
+            'max_upload_bytes'  => Plugin::DEFAULT_MAX_UPLOAD_BYTES,
+            'allowed_mime_types' => Plugin::DEFAULT_ALLOWED_MIME,
+        ];
+        // normalizza
+        $opt['max_upload_bytes'] = isset($opt['max_upload_bytes']) ? (int) $opt['max_upload_bytes'] : $defaults['max_upload_bytes'];
+        $mime = $opt['allowed_mime_types'] ?? $defaults['allowed_mime_types'];
+        if (is_string($mime)) {
+            $mime = preg_split('/\R+/', $mime) ?: [];
+        }
+        $mime = array_values(array_unique(array_filter(array_map('strval', (array)$mime))));
+        $opt['allowed_mime_types'] = $mime ?: $defaults['allowed_mime_types'];
+        return $opt + $defaults;
+    }
+
+    /** Sanitize dell’array option */
+    public static function sanitize_settings($input): array
+    {
+        $out = [];
+
+        $max = isset($input['max_upload_bytes']) ? (int)$input['max_upload_bytes'] : 0;
+        if ($max <= 0) {
+            $max = Plugin::DEFAULT_MAX_UPLOAD_BYTES;
+        }
+        $out['max_upload_bytes'] = $max;
+
+        if (isset($input['allowed_mime_types'])) {
+            $raw = [];
+            if (is_array($input['allowed_mime_types'])) {
+                $raw = $input['allowed_mime_types'];
+            } else {
+                $lines = preg_split('/\R+/', (string) $input['allowed_mime_types']);
+                $raw   = is_array($lines) ? $lines : [];
+            }
+            $mime = array_values(
+                array_unique(
+                    array_filter(
+                        array_map('trim', $raw)
+                    )
+                )
+            );
+
+            $out['allowed_mime_types'] = $mime;
+        }
+
+        return $out;
+    }
+
+    // ----- Settings fields render -----
+
+    public static function field_max_upload_bytes(): void
+    {
+        $opt = self::get_settings();
+        printf(
+            '<input type="number" name="%s[max_upload_bytes]" value="%d" min="1" step="1" class="regular-text" />',
+            esc_attr(self::OPTION_KEY),
+            (int)$opt['max_upload_bytes']
+        );
+        echo '<p class="description">' . esc_html__('Example: 52428800 for 50 MB', 'pfu') . '</p>';
+    }
+
+    public static function field_allowed_mime_types(): void
+    {
+        $opt = self::get_settings();
+        $val = implode("\n", (array)$opt['allowed_mime_types']);
+        printf(
+            '<textarea name="%s[allowed_mime_types]" rows="6" class="large-text code">%s</textarea>',
+            esc_attr(self::OPTION_KEY),
+            esc_textarea($val)
+        );
+        echo '<p class="description">' . esc_html__('One MIME per line, e.g. application/zip', 'pfu') . '</p>';
+    }
+
+    // ----- Overview page -----
+    public static function render_overview_page(): void
+    {
+        if (! \is_user_logged_in()) {
+            \wp_die(esc_html__('You must be logged in.', 'pfu'));
+        }
+
+        // Valori effettivi (defaults → options → filters)
+        $maxBytes = Plugin::effective_max_upload_bytes();
+        $mimes    = Plugin::effective_allowed_mime_types();
+
+        echo '<div class="wrap">';
+        echo '<h1>' . esc_html__('Private Uploader — Overview', 'pfu') . '</h1>';
+
+        echo '<p>' . esc_html__(
+            'This plugin lets you upload files to your private area on this site. The rules below apply to uploads performed via the mobile app or REST API.',
+            'pfu'
+        ) . '</p>';
+
+        // Stili minimi
+        echo '<style>
+      .pfu-cards{display:flex;gap:16px;flex-wrap:wrap;margin:16px 0}
+      .pfu-card{background:#fff;border:1px solid #e3e3e3;border-radius:8px;padding:16px;min-width:260px}
+      .pfu-card h2{margin:0 0 8px;font-size:16px}
+      .pfu-list{margin:8px 0 0 18px}
+      .pfu-muted{color:#666}
+      .pfu-actions{margin-top:16px}
+    </style>';
+
+        echo '<div class="pfu-cards">';
+
+        // Card: Max size
+        echo '<div class="pfu-card">';
+        echo '<h2>' . esc_html__('Max upload size', 'pfu') . '</h2>';
+        printf(
+            '<p><strong>%s</strong> <span class="pfu-muted">(%d bytes)</span></p>',
+            esc_html(self::human_size((int)$maxBytes)),
+            (int)$maxBytes
+        );
+        echo '<p class="pfu-muted">' . esc_html__('Requests exceeding this limit will be rejected.', 'pfu') . '</p>';
+        echo '</div>';
+
+        // Card: Allowed MIME types
+        echo '<div class="pfu-card">';
+        echo '<h2>' . esc_html__('Allowed MIME types', 'pfu') . '</h2>';
+
+        if (empty($mimes)) {
+            echo '<p class="pfu-muted">' . esc_html__('No MIME types configured.', 'pfu') . '</p>';
+        } else {
+            echo '<ul class="pfu-list">';
+            foreach ($mimes as $mt) {
+                echo '<li><code>' . esc_html($mt) . '</code></li>';
+            }
+            echo '</ul>';
+        }
+        echo '<p class="pfu-muted">' . esc_html__('Uploads with unsupported types will be rejected.', 'pfu') . '</p>';
+        echo '</div>';
+
+        echo '</div>'; // .pfu-cards
+
+        // Link utili
+        echo '<div class="pfu-actions">';
+        echo '<a class="button button-primary" href="' . esc_url(\admin_url('admin.php?page=pfu-library')) . '">'
+            . esc_html__('Open your Library', 'pfu') . '</a> ';
+
+        if (\current_user_can('manage_options')) {
+            echo '<a class="button" href="' . esc_url(\admin_url('admin.php?page=pfu-settings')) . '">'
+                . esc_html__('Settings', 'pfu') . '</a>';
+        }
+        echo '</div>';
+
+        echo '</div>'; // .wrap
+    }
+
+
+    // ----- Library page -----
+
+    public static function render_library_page(): void
+    {
+        if (! \is_user_logged_in()) {
+            \wp_die(esc_html__('You must be logged in.', 'pfu'));
+        }
+
+        $user = \wp_get_current_user();
+        $base = Plugin::get_user_base($user);
+        $dir  = $base['path'];
+        $url  = $base['url'];
+
+        echo '<div class="wrap"><h1>' . esc_html__('Your uploads', 'pfu') . '</h1>';
+        echo '<style>
+            .column-pfu-preview{width:60px;}
+            .pfu-thumb{width:48px;height:48px;object-fit:cover;border-radius:4px;background:#f3f3f3;display:block}
+            .pfu-icon{width:36px;height:36px;opacity:.85;display:block;margin:6px auto}
+            </style>';
+
+        if (! is_dir($dir)) {
+            echo '<p>' . esc_html__('You have not uploaded any files yet.', 'pfu') . '</p></div>';
+            return;
+        }
+
+        // Scan directory
+        $rows = [];
+        $dh = @opendir($dir);
+        if ($dh) {
+            while (false !== ($entry = readdir($dh))) {
+                if ($entry === '.' || $entry === '..' || $entry === 'index.html' || strpos($entry, "\0") !== false) {
+                    continue;
+                }
+                $abs = $dir . DIRECTORY_SEPARATOR . $entry;
+                if (\is_link($abs) || !is_file($abs)) continue;
+
+                $size  = @filesize($abs);
+                $mtime = @filemtime($abs);
+                $ft    = \wp_check_filetype($entry);
+                $mime  = ($ft && !empty($ft['type'])) ? $ft['type'] : 'application/octet-stream';
+
+                $rows[] = [
+                    'name' => $entry,
+                    'url'  => $url . '/' . rawurlencode($entry),
+                    'size' => is_int($size) ? $size : 0,
+                    'mtime' => is_int($mtime) ? $mtime : 0,
+                    'mime' => $mime,
+                ];
+            }
+            closedir($dh);
+        }
+
+        if (empty($rows)) {
+            echo '<p>' . esc_html__('No files found.', 'pfu') . '</p></div>';
+            return;
+        }
+
+        // Sort by mtime desc
+        usort($rows, fn($a, $b) => ($b['mtime'] <=> $a['mtime']));
+
+        // Table
+        echo '<table class="widefat fixed striped"><thead><tr>';
+        echo '<th class="column-pfu-preview">' . esc_html__('Preview', 'pfu') . '</th>';
+        echo '<th>' . esc_html__('File', 'pfu') . '</th>';
+        echo '<th>' . esc_html__('Size', 'pfu') . '</th>';
+        echo '<th>' . esc_html__('Modified', 'pfu') . '</th>';
+        echo '<th>' . esc_html__('MIME', 'pfu') . '</th>';
+        echo '<th>' . esc_html__('Actions', 'pfu') . '</th>';
+        echo '</tr></thead><tbody>';
+
+        foreach ($rows as $r) {
+            $name = $r['name'];
+            $view = esc_url($r['url']);
+            $nonce = \wp_create_nonce('pfu_del_' . $name);
+            $del  = \admin_url('admin-post.php?action=pfu_delete_file&file=' . rawurlencode($name) . '&_wpnonce=' . $nonce);
+
+            $is_image = (strpos((string)$r['mime'], 'image/') === 0);
+            $preview_html = '';
+            if ($is_image) {
+                // Usa direttamente l’URL del file come thumbnail "soft" (non abbiamo attachment ID)
+                $preview_html = sprintf(
+                    '<a href="%s" target="_blank" rel="noopener"><img class="pfu-thumb" src="%s" alt="" loading="lazy" /></a>',
+                    esc_url($r['url']),
+                    esc_url($r['url'])
+                );
+            } else {
+                // Icona predefinita WordPress per il MIME
+                $icon = \wp_mime_type_icon((string)$r['mime']);
+                if (empty($icon)) {
+                    // fallback generico
+                    $icon = \wp_mime_type_icon('application/octet-stream');
+                }
+                $preview_html = sprintf(
+                    '<img class="pfu-icon" src="%s" alt="" loading="lazy" />',
+                    esc_url($icon)
+                );
+            }
+
+            printf(
+                '<tr>
+                <td class="column-pfu-preview">%1$s</td>
+                <td><a href="%2$s" target="_blank" rel="noopener">%3$s</a></td>
+                <td>%4$s</td>
+                <td>%5$s</td>
+                <td>%6$s</td>
+                <td><a class="button button-small" href="%7$s" onclick="return confirm(\'%8$s\');">%9$s</a></td>
+                </tr>',
+                $preview_html,
+                esc_url($r['url']),
+                esc_html($r['name']),
+                esc_html(self::human_size((int)$r['size'])),
+                esc_html(gmdate('Y-m-d H:i', (int)$r['mtime'])),
+                esc_html((string)$r['mime']),
+                esc_url($del),
+                esc_js(__('Delete this file?', 'pfu')),
+                esc_html__('Delete', 'pfu')
+            );
+        }
+
+        echo '</tbody></table></div>';
+    }
+
+    /** Azione admin-post per cancellare un file dell’utente corrente (no JS necessario) */
+    public static function handle_delete_file(): void
+    {
+        if (! \is_user_logged_in()) {
+            \wp_die(esc_html__('You must be logged in.', 'pfu'));
+        }
+
+        $user = \wp_get_current_user();
+        $file = isset($_GET['file']) ? (string)$_GET['file'] : '';
+        $nonce = isset($_GET['_wpnonce']) ? (string)$_GET['_wpnonce'] : '';
+
+        if (! \wp_verify_nonce($nonce, 'pfu_del_' . $file)) {
+            \wp_die(esc_html__('Invalid nonce.', 'pfu'));
+        }
+
+        $baseFile = Plugin::sanitize_user_filename($file);
+        if (\is_wp_error($baseFile)) {
+            \wp_die(esc_html($baseFile->get_error_message()));
+        }
+
+        $paths = Plugin::get_user_base($user);
+        $abs   = $paths['path'] . DIRECTORY_SEPARATOR . $baseFile;
+
+        if (! file_exists($abs) || ! is_file($abs)) {
+            \wp_redirect(\admin_url('admin.php?page=pfu-library&pfu_msg=notfound'));
+            exit;
+        }
+
+        if (! Plugin::path_within_base($paths['path'], $abs) || \is_link($abs)) {
+            \wp_die(esc_html__('Invalid path.', 'pfu'));
+        }
+
+        $ok = @unlink($abs);
+        $msg = $ok ? 'deleted' : 'delerror';
+        \wp_redirect(\admin_url('admin.php?page=pfu-library&pfu_msg=' . $msg));
+        exit;
+    }
+
+    // ----- Settings page render -----
+
+    public static function render_settings_page(): void
+    {
+        if (! \current_user_can('manage_options')) {
+            \wp_die(esc_html__('You do not have permission to access this page.', 'pfu'));
+        }
+        echo '<div class="wrap"><h1>' . esc_html__('Private Uploader — Settings', 'pfu') . '</h1>';
+        echo '<form method="post" action="options.php">';
+        \settings_fields('pfu_settings_group');
+        \do_settings_sections('pfu-settings');
+        \submit_button();
+        echo '</form></div>';
+    }
+
+    private static function human_size(int $bytes): string
+    {
+        $u = ['B', 'KB', 'MB', 'GB', 'TB'];
+        $i = 0;
+        $n = $bytes;
+        while ($n >= 1024 && $i < count($u) - 1) {
+            $n /= 1024;
+            $i++;
+        }
+        return ($i === 0) ? "$n {$u[$i]}" : number_format($n, 2) . " {$u[$i]}";
+    }
+}

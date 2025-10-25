@@ -21,10 +21,35 @@ class Plugin
         'application/pdf',
     ];
 
+
+    // Restituisce il limite effettivo (defaults → options → filters)
+    public static function effective_max_upload_bytes(): int
+    {
+        return self::get_max_upload_bytes();
+    }
+
+    /** @return array<string> Elenco MIME effettivi (defaults → options → filters) */
+    public static function effective_allowed_mime_types(): array
+    {
+        return self::get_allowed_mime_types();
+    }
+
     // Recupera il limite massimo (byte) – configurabile con filtro 'pfu_max_upload_bytes'
     private static function get_max_upload_bytes(): int
     {
-        $max = (int) apply_filters('pfu_max_upload_bytes', self::DEFAULT_MAX_UPLOAD_BYTES);
+        // 1) defaults
+        $max = self::DEFAULT_MAX_UPLOAD_BYTES;
+
+        // 2) options (admin)
+        if (class_exists(__NAMESPACE__ . '\\Admin')) {
+            $opt = Admin::get_settings();
+            if (! empty($opt['max_upload_bytes']) && (int)$opt['max_upload_bytes'] > 0) {
+                $max = (int)$opt['max_upload_bytes'];
+            }
+        }
+
+        // 3) filters (possono ancora override)
+        $max = (int) apply_filters('pfu_max_upload_bytes', $max);
         return $max > 0 ? $max : self::DEFAULT_MAX_UPLOAD_BYTES;
     }
 
@@ -32,11 +57,22 @@ class Plugin
     /** @return array<string> */
     private static function get_allowed_mime_types(): array
     {
-        $m = apply_filters('pfu_allowed_mime_types', self::DEFAULT_ALLOWED_MIME);
-        if (!is_array($m) || empty($m)) {
-            return self::DEFAULT_ALLOWED_MIME;
+        // 1) defaults
+        $allowed = self::DEFAULT_ALLOWED_MIME;
+
+        // 2) options (admin)
+        if (class_exists(__NAMESPACE__ . '\\Admin')) {
+            $opt = Admin::get_settings();
+            if (! empty($opt['allowed_mime_types']) && is_array($opt['allowed_mime_types'])) {
+                $allowed = array_values(array_unique(array_filter(array_map('strval', $opt['allowed_mime_types']))));
+            }
         }
-        // normalizza
+
+        // 3) filters
+        $m = apply_filters('pfu_allowed_mime_types', $allowed);
+        if (!is_array($m) || empty($m)) {
+            return $allowed;
+        }
         return array_values(array_unique(array_filter(array_map('strval', $m))));
     }
 
@@ -390,7 +426,7 @@ class Plugin
         foreach ($paged_items as &$it) {
            $it['modified'] = is_int($it['modified']) ? gmdate('c', $it['modified']) : null;
         }*/
-           
+
         $resp = new \WP_REST_Response([
             'ok'          => true,
             'items'       => $paged_items,
@@ -518,7 +554,7 @@ class Plugin
     }
 
     /** Ritorna [ 'path' => <abs path>, 'url' => <base url> ] per la cartella dell'utente */
-    private static function get_user_base(\WP_User $user): array
+    public static function get_user_base(\WP_User $user): array
     {
         $username = \sanitize_user($user->user_login, true);
         if (empty($username)) {
@@ -543,7 +579,7 @@ class Plugin
     }
 
     /** Validazione forte del filename (niente path traversal, niente slash). Restituisce basename sanificato o WP_Error */
-    private static function sanitize_user_filename($filename)
+    public static function sanitize_user_filename($filename)
     {
         if (! is_string($filename) || $filename === '') {
             return new \WP_Error('pfu_bad_filename', 'Invalid filename');
@@ -564,7 +600,7 @@ class Plugin
     //Helper: Aggiungiamo una verifica con realpath() 
     //per assicurarci che il path target cada davvero dentro alla cartella utente (protezione extra contro symlink/traversal)
     /** TRUE se $candidate è dentro $base (dopo realpath), altrimenti FALSE */
-    private static function path_within_base(string $base, string $candidate): bool
+    public static function path_within_base(string $base, string $candidate): bool
     {
         $baseReal = \realpath($base);
         $candReal = \realpath($candidate);
