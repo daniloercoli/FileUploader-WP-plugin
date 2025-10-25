@@ -234,6 +234,79 @@ class Admin
         echo '<p class="pfu-muted">' . esc_html__('Uploads with unsupported types will be rejected.', 'pfu') . '</p>';
         echo '</div>';
 
+        // --- Server-side limits card ---
+        // Policy del plugin (soglia che vuoi raggiungere)
+        $policyMax = method_exists('\\PFU\\Plugin', 'effective_max_upload_bytes')
+            ? \PFU\Plugin::effective_max_upload_bytes()
+            : (defined('\\PFU\\Plugin::DEFAULT_MAX_UPLOAD_BYTES') ? \PFU\Plugin::DEFAULT_MAX_UPLOAD_BYTES : 0);
+
+        // Valori php.ini letti a runtime
+        list($upHuman,  $upBytes,  $upRaw)  = self::ini_pair('upload_max_filesize');
+        list($postHuman, $postBytes, $postRaw) = self::ini_pair('post_max_size');
+        list($memHuman, $memBytes, $memRaw) = self::ini_pair('memory_limit');
+        $maxUploads = @ini_get('max_file_uploads');
+        $execTime   = @ini_get('max_execution_time');
+
+        // Colori/avvisi se i limiti PHP sono più bassi della policy che desideri
+        $warns = [];
+        if ($policyMax > 0 && $upBytes  > 0 && $upBytes  < $policyMax) $warns[] = 'upload_max_filesize';
+        if ($policyMax > 0 && $postBytes > 0 && $postBytes < $policyMax) $warns[] = 'post_max_size';
+
+        echo '<div style="margin-top:16px;background:#fff;border:1px solid #e3e3e3;border-radius:8px;padding:16px">';
+        echo '<h2 style="margin-top:0">' . esc_html__('Server limits (PHP)', 'pfu') . '</h2>';
+
+        echo '<table class="widefat striped" style="margin-top:8px">';
+        echo '<tbody>';
+        printf(
+            '<tr><td>%s</td><td><code>%s</code> <span class="pfu-muted">(%s)</span></td></tr>',
+            esc_html__('upload_max_filesize', 'pfu'),
+            esc_html($upRaw),
+            esc_html($upHuman)
+        );
+        printf(
+            '<tr><td>%s</td><td><code>%s</code> <span class="pfu-muted">(%s)</span></td></tr>',
+            esc_html__('post_max_size', 'pfu'),
+            esc_html($postRaw),
+            esc_html($postHuman)
+        );
+        printf(
+            '<tr><td>%s</td><td><code>%s</code> <span class="pfu-muted">(%s)</span></td></tr>',
+            esc_html__('memory_limit', 'pfu'),
+            esc_html($memRaw),
+            esc_html($memHuman)
+        );
+        printf(
+            '<tr><td>%s</td><td><code>%s</code></td></tr>',
+            esc_html__('max_file_uploads', 'pfu'),
+            esc_html((string)$maxUploads)
+        );
+        printf(
+            '<tr><td>%s</td><td><code>%s</code> %s</td></tr>',
+            esc_html__('max_execution_time', 'pfu'),
+            esc_html((string)$execTime),
+            '<span class="pfu-muted">' . esc_html__('seconds', 'pfu') . '</span>'
+        );
+        echo '</tbody></table>';
+
+        // Nota esplicativa + warning
+        echo '<p class="pfu-muted" style="margin-top:8px">';
+        echo esc_html__('Note: PHP/server limits must also allow the requested size. If uploads fail for large files, raise both upload_max_filesize and post_max_size (and check web server/proxy limits).', 'pfu');
+        echo '</p>';
+
+        if (!empty($warns)) {
+            echo '<div style="margin-top:8px;padding:8px 12px;border-left:4px solid #d63638;background:#fff3f3">';
+            echo '<strong>' . esc_html__('Warning:', 'pfu') . '</strong> ';
+            echo esc_html__('Your PHP limits are below the plugin policy. Increase the following:', 'pfu') . ' ';
+            echo '<code>' . esc_html(implode(', ', $warns)) . '</code>';
+            if ($policyMax > 0) {
+                echo ' — ' . esc_html__('desired at least', 'pfu') . ': <strong>' . esc_html(self::human_size((int)$policyMax)) . '</strong>';
+            }
+            echo '</div>';
+        }
+
+        echo '</div>'; // card
+
+
         echo '</div>'; // .pfu-cards
 
         // Link utili
@@ -436,5 +509,37 @@ class Admin
             $i++;
         }
         return ($i === 0) ? "$n {$u[$i]}" : number_format($n, 2) . " {$u[$i]}";
+    }
+
+    /** Converte shorthand INI (es. "128M", "2G") in bytes */
+    private static function ini_bytes($val): int
+    {
+        if ($val === null || $val === '') return 0;
+        $v = trim((string)$val);
+        if ($v === '-1') return PHP_INT_MAX; // illimitato
+        if (preg_match('/^\d+$/', $v)) return (int)$v;
+        if (!preg_match('/^\s*([0-9\.]+)\s*([KMGkmg])\s*$/', $v, $m)) return (int)$v;
+        $n = (float)$m[1];
+        $u = strtoupper($m[2]);
+        switch ($u) {
+            case 'G':
+                $n *= 1024;
+                // no break
+            case 'M':
+                $n *= 1024;
+                // no break
+            case 'K':
+                $n *= 1024;
+        }
+        return (int)round($n);
+    }
+
+    /** Ritorna una coppia [human, bytes] pronta da mostrare */
+    private static function ini_pair(string $key): array
+    {
+        $raw = @ini_get($key);
+        $bytes = self::ini_bytes($raw);
+        $human = ($raw === false || $raw === '') ? 'N/A' : ($raw === '-1' ? __('Unlimited', 'pfu') : self::human_size($bytes));
+        return [$human, $bytes, (string)$raw];
     }
 }
