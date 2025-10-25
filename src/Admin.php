@@ -16,6 +16,8 @@ class Admin
         \add_action('admin_menu', [__CLASS__, 'register_menu']);
         \add_action('admin_init', [__CLASS__, 'register_settings']);
         \add_action('admin_post_pfu_delete_file', [__CLASS__, 'handle_delete_file']);
+        \add_action('admin_post_pfu_safe_deactivate_handle', [__CLASS__, 'handle_safe_deactivate']);
+        \add_action('admin_notices', [__CLASS__, 'plugins_screen_notice']);
     }
 
     /** Menu: voce principale + sottovoci (Library per tutti, Settings per admin) */
@@ -63,6 +65,21 @@ class Admin
             'pfu-settings',
             [__CLASS__, 'render_settings_page']
         );
+
+        // Hidden page: Safe Deactivate (only admins)
+        \add_submenu_page(
+            'pfu-overview',
+            __('Safe Deactivate', 'pfu'),
+            __('Safe Deactivate', 'pfu'),
+            'manage_options',
+            'pfu-safe-deactivate',
+            [__CLASS__, 'render_safe_deactivate_page']
+        );
+
+        // Hide from the sidebar but keep it routable
+        \add_action('admin_head', function () {
+            \remove_submenu_page('pfu-overview', 'pfu-safe-deactivate');
+        });
     }
 
     /** Registra impostazioni (pfu_settings) */
@@ -174,6 +191,90 @@ class Admin
             esc_textarea($val)
         );
         echo '<p class="description">' . esc_html__('One MIME per line, e.g. application/zip', 'pfu') . '</p>';
+    }
+
+    // ----- Safe deactivate page -----
+    public static function render_safe_deactivate_page(): void
+    {
+        if (! \current_user_can('manage_options')) {
+            \wp_die(esc_html__('You do not have permission to access this page.', 'pfu'));
+        }
+
+        $root = \PFU\Plugin::storage_root_base();
+        $htaccessPath = trailingslashit($root) . '.htaccess';
+        $webConfigPath = trailingslashit($root) . 'web.config';
+        $exists = is_dir($root);
+
+        $nonce = \wp_create_nonce('pfu_safe_deactivate');
+
+        echo '<div class="wrap"><h1>' . esc_html__('Safe Deactivate — Private Uploader', 'pfu') . '</h1>';
+
+        if (!$exists) {
+            echo '<p class="description">' . esc_html__('Storage directory not found; nothing to clean.', 'pfu') . '</p>';
+        } else {
+            echo '<p><strong>' . esc_html__('Storage directory', 'pfu') . ':</strong> <code>' . esc_html($root) . '</code></p>';
+        }
+
+        echo '<p>' . esc_html__('Choose what to do with stored files before deactivating the plugin.', 'pfu') . '</p>';
+
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+        echo '<input type="hidden" name="action" value="pfu_safe_deactivate_handle" />';
+        echo '<input type="hidden" name="_wpnonce" value="' . esc_attr($nonce) . '" />';
+
+        echo '<table class="form-table"><tbody>';
+
+        // Option A: Delete everything
+        echo '<tr><th scope="row">' . esc_html__('Delete all files', 'pfu') . '</th><td>';
+        echo '<label><input type="radio" name="pfu_mode" value="delete" /> ';
+        echo esc_html__('Delete ALL user files from disk, then deactivate the plugin.', 'pfu') . '</label>';
+        echo '<p class="description">' . esc_html__('This cannot be undone. Consider backing up first.', 'pfu') . '</p>';
+        echo '</td></tr>';
+
+        // Option B: Keep files, write deny rules
+        echo '<tr><th scope="row">' . esc_html__('Keep files (block access)', 'pfu') . '</th><td>';
+        echo '<label><input type="radio" name="pfu_mode" value="deny" checked /> ';
+        echo esc_html__('Keep files on disk and block direct web access where possible.', 'pfu') . '</label>';
+        echo '<p class="description">' . esc_html__('We will attempt to create deny rules for Apache/IIS. For Nginx, add the snippet below to your server config.', 'pfu') . '</p>';
+
+        // Apache .htaccess preview
+        echo '<h4>' . esc_html__('Apache (.htaccess)', 'pfu') . '</h4>';
+        echo '<pre style="background:#f7f7f7;padding:8px;overflow:auto"><code>';
+        echo esc_html("Options -Indexes\nRequire all denied\n");
+        echo "</code></pre>";
+        echo '<p class="description">' . esc_html__('Target:', 'pfu') . ' <code>' . esc_html($htaccessPath) . '</code></p>';
+
+        // IIS web.config preview
+        echo '<h4>' . esc_html__('IIS (web.config)', 'pfu') . '</h4>';
+        echo '<pre style="background:#f7f7f7;padding:8px;overflow:auto"><code>';
+        echo esc_html('<configuration>
+            <system.webServer>
+                <security>
+                <authorization>
+                    <remove users="*" roles="" verbs="" />
+                    <add accessType="Deny" users="*" />
+                </authorization>
+                </security>
+                <directoryBrowse enabled="false" />
+            </system.webServer>
+            </configuration>');
+        echo "</code></pre>";
+        echo '<p class="description">' . esc_html__('Target:', 'pfu') . ' <code>' . esc_html($webConfigPath) . '</code></p>';
+
+        // Nginx snippet
+        echo '<h4>' . esc_html__('Nginx (add to server config)', 'pfu') . '</h4>';
+        echo '<pre style="background:#f7f7f7;padding:8px;overflow:auto"><code>';
+        $escaped = "location ^~ " . trailingslashit(str_replace(ABSPATH, '/', $root)) . " {\n    deny all;\n}\n";
+        echo esc_html($escaped);
+        echo "</code></pre>";
+
+        echo '</td></tr>';
+
+        echo '</tbody></table>';
+
+        submit_button(__('Proceed and deactivate', 'pfu'));
+        echo ' <a class="button button-secondary" href="' . esc_url(admin_url('plugins.php')) . '">' . esc_html__('Cancel', 'pfu') . '</a>';
+
+        echo '</form></div>';
     }
 
     // ----- Overview page -----
@@ -325,7 +426,6 @@ class Admin
 
 
     // ----- Library page -----
-
     public static function render_library_page(): void
     {
         if (! \is_user_logged_in()) {
@@ -483,6 +583,79 @@ class Admin
         \wp_redirect(\admin_url('admin.php?page=pfu-library&pfu_msg=' . $msg));
         exit;
     }
+
+    public static function handle_safe_deactivate(): void
+    {
+        if (! \current_user_can('manage_options')) {
+            \wp_die(esc_html__('You do not have permission.', 'pfu'));
+        }
+        \check_admin_referer('pfu_safe_deactivate');
+
+        $mode = isset($_POST['pfu_mode']) ? (string)$_POST['pfu_mode'] : 'deny';
+        $root = \PFU\Plugin::storage_root_base();
+
+        if ($mode === 'delete') {
+            self::rrmdir($root);
+            $msg = 'pfu_deleted';
+        } else {
+            // write deny rules for Apache/IIS if possible
+            if (is_dir($root) && is_writable($root)) {
+                @file_put_contents(trailingslashit($root) . '.htaccess', "Options -Indexes\nRequire all denied\n");
+                @file_put_contents(trailingslashit($root) . 'web.config', "<configuration>\n  <system.webServer>\n    <security>\n      <authorization>\n        <remove users=\"*\" roles=\"\" verbs=\"\" />\n        <add accessType=\"Deny\" users=\"*\" />\n      </authorization>\n    </security>\n    <directoryBrowse enabled=\"false\" />\n  </system.webServer>\n</configuration>\n");
+            }
+            $msg = 'pfu_denied';
+        }
+
+        // Deactivate plugin programmatically
+        \deactivate_plugins(plugin_basename(PFU_PLUGIN_FILE));
+
+        // Redirect back to Plugins screen with admin notice
+        $url = add_query_arg('pfu_notice', $msg, admin_url('plugins.php'));
+        \wp_redirect($url);
+        exit;
+    }
+
+    public static function plugins_screen_notice(): void
+    {
+        if (! isset($_GET['pfu_notice']) || ! function_exists('get_current_screen')) return;
+        $screen = get_current_screen();
+        if (! $screen || $screen->base !== 'plugins') return;
+
+        $code = sanitize_text_field((string) $_GET['pfu_notice']);
+        if ($code === 'pfu_deleted') {
+            echo '<div class="notice notice-success is-dismissible"><p>'
+                . esc_html__('Private Uploader: all files were deleted and the plugin was deactivated.', 'pfu')
+                . '</p></div>';
+        } elseif ($code === 'pfu_denied') {
+            echo '<div class="notice notice-warning is-dismissible"><p>'
+                . esc_html__('Private Uploader: deny rules were written (Apache/IIS) and the plugin was deactivated. For Nginx, add the suggested location block.', 'pfu')
+                . '</p></div>';
+        }
+    }
+
+
+    /** Recursive delete of a directory */
+    private static function rrmdir(string $dir): void
+    {
+        if (!is_dir($dir)) return;
+        $items = @scandir($dir);
+        if (!is_array($items)) return;
+        foreach ($items as $it) {
+            if ($it === '.' || $it === '..') continue;
+            $p = $dir . DIRECTORY_SEPARATOR . $it;
+            if (is_link($p)) {
+                @unlink($p);
+                continue;
+            }
+            if (is_dir($p)) {
+                self::rrmdir($p);
+                continue;
+            }
+            @unlink($p);
+        }
+        @rmdir($dir);
+    }
+
 
     // ----- Settings page render -----
 

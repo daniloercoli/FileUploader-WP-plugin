@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Plugin Name: Private File Uploader
  * Description: Secure file uploads to a per-user directory via custom REST endpoints. Pairs with a React Native client.
@@ -11,10 +12,20 @@ if (! defined('ABSPATH')) {
     exit;
 }
 
+define('PFU_PLUGIN_FILE', __FILE__);
+define('PFU_PLUGIN_DIR', plugin_dir_path(__FILE__));
+define('PFU_PLUGIN_URL', plugin_dir_url(__FILE__));
+
 require_once __DIR__ . '/src/Plugin.php';
 require_once __DIR__ . '/src/Admin.php';
 
 add_action('plugins_loaded', function () {
     \PFU\Plugin::init();
     \PFU\Admin::init();
+});
+
+add_filter('plugin_action_links_' . plugin_basename(__FILE__), function (array $links) {
+    $url = admin_url('admin.php?page=pfu-safe-deactivate');
+    array_unshift($links, '<a href="' . esc_url($url) . '">' . esc_html__('Safe Deactivate', 'pfu') . '</a>');
+    return $links;
 });

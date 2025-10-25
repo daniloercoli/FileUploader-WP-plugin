@@ -21,6 +21,11 @@ class Plugin
         'application/pdf',
     ];
 
+    public static function storage_root_base(): string
+    {
+        $up = \wp_get_upload_dir();
+        return trailingslashit($up['basedir']) . self::SUB_BASE; // e.g. wp-content/uploads/media/private-file-uploader
+    }
 
     // Restituisce il limite effettivo (defaults → options → filters)
     public static function effective_max_upload_bytes(): int
