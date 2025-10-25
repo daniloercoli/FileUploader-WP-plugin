@@ -17,7 +17,14 @@ class Admin
         \add_action('admin_init', [__CLASS__, 'register_settings']);
         \add_action('admin_post_pfu_delete_file', [__CLASS__, 'handle_delete_file']);
         \add_action('admin_post_pfu_safe_deactivate_handle', [__CLASS__, 'handle_safe_deactivate']);
+
         \add_action('admin_notices', [__CLASS__, 'plugins_screen_notice']);
+        \add_action('admin_notices', [__CLASS__, 'users_screen_notice']);
+
+        \add_action('delete_user_form', [__CLASS__, 'delete_user_form'], 10, 1);
+        \add_action('delete_user', [__CLASS__, 'handle_delete_user'], 10, 1);
+        // Multisite (se usi network)
+        \add_action('wpmu_delete_user', [__CLASS__, 'handle_delete_user'], 10, 1);
     }
 
     /** Menu: voce principale + sottovoci (Library per tutti, Settings per admin) */
@@ -633,7 +640,6 @@ class Admin
         }
     }
 
-
     /** Recursive delete of a directory */
     private static function rrmdir(string $dir): void
     {
@@ -714,5 +720,112 @@ class Admin
         $bytes = self::ini_bytes($raw);
         $human = ($raw === false || $raw === '') ? 'N/A' : ($raw === '-1' ? __('Unlimited', 'pfu') : self::human_size($bytes));
         return [$human, $bytes, (string)$raw];
+    }
+
+    /* --- Cancellazione utente ---- */
+    public static function delete_user_form($user): void
+    {
+        if (! \current_user_can('delete_users')) return;
+
+        $nonce = \wp_create_nonce('pfu_delete_user_files_' . (int)$user->ID);
+
+        echo '<h2>' . esc_html__('Private Uploader — User files', 'pfu') . '</h2>';
+        echo '<p>' . esc_html__('Choose what to do with this user’s uploaded files.', 'pfu') . '</p>';
+
+        echo '<input type="hidden" name="pfu_nonce" value="' . esc_attr($nonce) . '" />';
+
+        echo '<fieldset class="pfu-box" style="border:1px solid #ccd0d4;padding:12px;max-width:680px;background:#fff">';
+        echo '<label style="display:block;margin-bottom:8px">';
+        echo '<input type="radio" name="pfu_user_files_action" value="delete" /> ';
+        echo '<strong>' . esc_html__('Delete all files', 'pfu') . '</strong> — ';
+        echo esc_html__('remove this user’s storage directory permanently.', 'pfu');
+        echo '</label>';
+
+        echo '<label style="display:block;margin-bottom:8px">';
+        echo '<input type="radio" name="pfu_user_files_action" value="reassign" checked /> ';
+        echo '<strong>' . esc_html__('Reassign to another user', 'pfu') . '</strong> — ';
+        echo esc_html__('move the storage directory to the selected user.', 'pfu');
+        echo '<br />';
+        \wp_dropdown_users([
+            'name'              => 'pfu_reassign_user',
+            'selected'          => 0,
+            'exclude'           => [(int)$user->ID],
+            'show'              => 'user_login',
+            'show_option_none'  => __('— Select user —', 'pfu'),
+        ]);
+        echo '</label>';
+
+        // Suggerimenti deny
+        echo '<label style="display:block;margin-bottom:8px">';
+        echo '<input type="radio" name="pfu_user_files_action" value="keep_deny" /> ';
+        echo '<strong>' . esc_html__('Keep files (no automatic blocking)', 'pfu') . '</strong> — ';
+        echo esc_html__('keep files on disk. You must manually add web server rules to block access (Apache/Nginx/IIS).', 'pfu');
+        echo '</label>';
+
+        echo '</fieldset>';
+    }
+
+    public static function handle_delete_user(int $user_id): void
+    {
+        if (! \current_user_can('delete_users')) return;
+
+        $action = isset($_POST['pfu_user_files_action']) ? (string)$_POST['pfu_user_files_action'] : '';
+        $nonce  = isset($_POST['pfu_nonce']) ? (string)$_POST['pfu_nonce'] : '';
+        if (empty($action) || ! \wp_verify_nonce($nonce, 'pfu_delete_user_files_' . (int)$user_id)) {
+            return; // nessuna scelta o nonce mancante → non toccare nulla
+        }
+
+        $user = \get_user_by('id', $user_id);
+        if (! $user) return;
+
+        $root = \PFU\Plugin::storage_root_base();
+        $src  = $root . DIRECTORY_SEPARATOR . $user->user_login;
+
+        if (! is_dir($src)) return; // niente storage → nulla da fare
+
+        if ($action === 'delete') {
+            self::rrmdir($src);
+            return;
+        }
+
+        if ($action === 'reassign') {
+            $to_id = isset($_POST['pfu_reassign_user']) ? (int)$_POST['pfu_reassign_user'] : 0;
+            $to    = $to_id ? \get_user_by('id', $to_id) : null;
+            if ($to && $to->user_login) {
+                $dst = $root . DIRECTORY_SEPARATOR . $to->user_login;
+
+                // Se esiste già, unisci in sottocartella o rinomina con suffisso
+                if (is_dir($dst)) {
+                    $suffix = '-' . gmdate('YmdHis');
+                    $dst = $dst . $suffix;
+                }
+
+                @rename($src, $dst);
+            }
+            return;
+        }
+
+        if ($action === 'keep_deny') {
+            // NON scriviamo regole automaticamente. Mostreremo un avviso dopo il redirect.
+            set_transient('pfu_notice_users', 'kept_manual_rules', 60); // dura 60s, sufficiente per il redirect
+            return;
+        }
+    }
+    public static function users_screen_notice(): void
+    {
+        if (! function_exists('get_current_screen')) return;
+        $screen = get_current_screen();
+        if (! $screen || $screen->base !== 'users') return;
+
+        $code = get_transient('pfu_notice_users');
+        if (! $code) return;
+
+        delete_transient('pfu_notice_users');
+
+        if ($code === 'kept_manual_rules') {
+            echo '<div class="notice notice-warning is-dismissible"><p>'
+                . esc_html__('Private Uploader: files were kept. Please add deny rules to your web server manually (Apache/Nginx/IIS) to block public access.', 'pfu')
+                . '</p></div>';
+        }
     }
 }
