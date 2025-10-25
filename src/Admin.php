@@ -746,13 +746,42 @@ class Admin
         echo '<strong>' . esc_html__('Reassign to another user', 'pfu') . '</strong> — ';
         echo esc_html__('move the storage directory to the selected user.', 'pfu');
         echo '<br />';
+        // Calcola gli ID da escludere (utente singolo o bulk)
+        $exclude_ids = [];
+
+       /* if ($user instanceof \WP_User) {
+            $exclude_ids[] = (int) $user->ID; // utente mostrato nel form
+        }*/
+
+        // In bulk delete, WordPress passa gli ID in request
+        if (isset($_REQUEST['user'])) {
+            $exclude_ids[] = (int) $_REQUEST['user'];
+        }
+        if (! empty($_REQUEST['users']) && is_array($_REQUEST['users'])) {
+            foreach ($_REQUEST['users'] as $uid) {
+                $exclude_ids[] = (int) $uid;
+            }
+        }
+
+        $exclude_ids = array_values(array_unique(array_filter($exclude_ids, fn($n) => $n > 0)));
+
+        // Valore “nessuna selezione”
+        $none_value = '0';
+
+        // Dropdown utenti: niente selezione di default, escludi gli ID in cancellazione
         \wp_dropdown_users([
-            'name'              => 'pfu_reassign_user',
-            'selected'          => 0,
-            'exclude'           => [(int)$user->ID],
-            'show'              => 'user_login',
-            'show_option_none'  => __('— Select user —', 'pfu'),
+            'name'               => 'pfu_reassign_user',
+            'selected'           => $none_value,                 // non selezionare l’utente corrente
+            'option_none_value'  => $none_value,
+            'show_option_none'   => __('— Select user —', 'pfu'),
+            'exclude'            => $exclude_ids,                // escludi utenti in cancellazione
+            'orderby'            => 'user_login',
+            'order'              => 'ASC',
+            'show'               => 'user_login',
+            'include_selected'   => true,                        // mostra l’opzione “none” selezionata
+            'who'                => '',                          // tutti gli utenti
         ]);
+
         echo '</label>';
 
         // Suggerimenti deny
