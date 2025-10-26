@@ -268,6 +268,18 @@ class Plugin
      */
     public static function route_upload(\WP_REST_Request $req): \WP_REST_Response
     {
+        $user = wp_get_current_user();
+        if (!$user || 0 === $user->ID) {
+            Utils::log_error('Upload failed: user not authenticated');
+            return new \WP_REST_Response(['ok' => false, 'error' => 'Not authenticated'], 401);
+        }
+
+        if (!self::check_rate_limit($user->ID)) {
+            return new \WP_REST_Response([
+                'ok' => false,
+                'error' => 'Rate limit exceeded. Try again later.'
+            ], 429);
+        }
         // Get uploaded files from the request (WP maps them from $_FILES)
         $files = $req->get_file_params();
 
@@ -345,12 +357,6 @@ class Plugin
                 'allowed'   => $allowed,
                 'hint'      => 'Allowed MIME types can be configured via the pfu_allowed_mime_types filter.',
             ], 415);
-        }
-
-        $user = wp_get_current_user();
-        if (!$user || 0 === $user->ID) {
-            Utils::log_error('Upload failed: user not authenticated');
-            return new \WP_REST_Response(['ok' => false, 'error' => 'Not authenticated'], 401);
         }
 
         $username = sanitize_user($user->user_login, true);
@@ -823,5 +829,18 @@ class Plugin
         }
 
         return $base;
+    }
+
+    private static function check_rate_limit(int $user_id): bool
+    {
+        $transient_key = "pfu_rate_limit_{$user_id}";
+        $attempts = get_transient($transient_key) ?: 0;
+
+        if ($attempts >= 50) { // 50 upload/ora
+            return false;
+        }
+
+        set_transient($transient_key, $attempts + 1, HOUR_IN_SECONDS);
+        return true;
     }
 }
