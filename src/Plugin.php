@@ -206,12 +206,12 @@ class Plugin
         if (is_user_logged_in()) {
             return true;
         }
-        
+
         Utils::log_warning('Unauthorized access attempt', [
             'endpoint' => $req->get_route(),
             'ip' => Utils::get_client_ip()
         ]);
-        
+
         return new \WP_Error('pfu_auth', 'Authentication required', ['status' => 401]);
     }
 
@@ -226,13 +226,13 @@ class Plugin
         if (is_user_logged_in() && current_user_can('upload_files')) {
             return true;
         }
-        
+
         Utils::log_warning('Forbidden access attempt - insufficient permissions', [
             'endpoint' => $req->get_route(),
             'user_id' => get_current_user_id(),
             'ip' => Utils::get_client_ip()
         ]);
-        
+
         return new \WP_Error('pfu_forbidden', 'Insufficient permissions', ['status' => 403]);
     }
 
@@ -245,13 +245,13 @@ class Plugin
     public static function route_ping(\WP_REST_Request $req): \WP_REST_Response
     {
         $user = wp_get_current_user();
-        
+
         Utils::log_info('Ping endpoint accessed', [
             'user' => $user ? $user->user_login : 'guest',
             'ip' => Utils::get_client_ip(),
             'mobile' => Utils::is_mobile_request()
         ]);
-        
+
         return new \WP_REST_Response([
             'ok'      => true,
             'user'    => $user ? $user->user_login : null,
@@ -291,18 +291,18 @@ class Plugin
         }
 
         $original_filename = $files['file']['name'] ?? 'unknown';
-        
+
         // Validations: max size + MIME allowlist
         $size = isset($files['file']['size']) ? (int)$files['file']['size'] : 0;
         $max  = self::get_max_upload_bytes();
-        
+
         if ($size <= 0) {
             Utils::log_warning('Upload rejected: empty file', [
                 'filename' => $original_filename
             ]);
             return new \WP_REST_Response(['ok' => false, 'error' => 'Empty upload or unknown size'], 400);
         }
-        
+
         if ($size > $max) {
             Utils::log_warning('Upload rejected: file too large', [
                 'filename' => $original_filename,
@@ -311,7 +311,7 @@ class Plugin
                 'size_human' => Utils::human_bytes($size),
                 'limit_human' => Utils::human_bytes($max)
             ]);
-            
+
             return new \WP_REST_Response([
                 'ok'    => false,
                 'error' => 'File too large',
@@ -325,7 +325,7 @@ class Plugin
         // MIME detection using Utils
         $allowed = self::get_allowed_mime_types();
         $mime = Utils::detect_mime_type($files['file']['tmp_name'], $original_filename);
-        
+
         // Fallback to client header if detection failed
         if ($mime === null && !empty($files['file']['type'])) {
             $mime = (string)$files['file']['type'];
@@ -337,7 +337,7 @@ class Plugin
                 'mime' => $mime,
                 'allowed' => $allowed
             ]);
-            
+
             return new \WP_REST_Response([
                 'ok'        => false,
                 'error'     => 'Unsupported media type',
@@ -357,7 +357,7 @@ class Plugin
         if (empty($username)) {
             $username = 'user-' . $user->ID;
         }
-        
+
         Utils::log_info('Upload started', [
             'user' => $username,
             'filename' => $original_filename,
@@ -367,7 +367,7 @@ class Plugin
             'ip' => Utils::get_client_ip(),
             'user_agent' => Utils::get_user_agent()
         ]);
-        
+
         $subdir = '/' . self::SUB_BASE . '/' . $username;
 
         // Temporarily override upload directory
@@ -396,12 +396,12 @@ class Plugin
         ];
 
         $overrides = ['test_form' => false];
-        
+
         // Ensure upload functions are loaded
         if (!function_exists('\wp_handle_sideload')) {
             require_once ABSPATH . 'wp-admin/includes/file.php';
         }
-        
+
         $moved = \wp_handle_sideload($file_array, $overrides);
         remove_filter('upload_dir', $filter, 10);
 
@@ -411,12 +411,12 @@ class Plugin
                 'filename' => $original_filename,
                 'error' => $moved['error']
             ]);
-            
+
             return new \WP_REST_Response(['ok' => false, 'error' => $moved['error']], 400);
         }
 
         $final_filename = wp_basename($moved['file']);
-        
+
         // Save metadata
         Utils::save_file_metadata($moved['file'], [
             'original_name' => $original_filename,
@@ -426,7 +426,7 @@ class Plugin
             'user_agent' => Utils::get_user_agent(),
             'mobile' => Utils::is_mobile_request()
         ]);
-        
+
         Utils::log_info('Upload completed successfully', [
             'user' => $username,
             'original_filename' => $original_filename,
@@ -477,7 +477,7 @@ class Plugin
         if ($order !== 'asc' && $order !== 'desc') {
             $order = 'desc';
         }
-        
+
         Utils::log_debug('File list requested', [
             'user' => $base['username'],
             'page' => $page,
@@ -490,7 +490,7 @@ class Plugin
                 'user' => $base['username'],
                 'dir' => $dir
             ]);
-            
+
             return new \WP_REST_Response([
                 'ok'          => true,
                 'items'       => [],
@@ -511,12 +511,15 @@ class Plugin
                 if ($entry === '.' || $entry === '..' || $entry === 'index.html' || strpos($entry, "\0") !== false) {
                     continue;
                 }
-                
-                // Skip metadata files
-                if (substr($entry, -10) === '.meta.json') {
+
+                // Skip metadata files using Utils helper
+                if (Utils::is_metadata_file($entry)) {
                     continue;
                 }
-                
+                if (Utils::is_system_file($entry)) {
+                    continue;
+                }
+
                 $abs = $dir . DIRECTORY_SEPARATOR . $entry;
                 if (\is_link($abs) || !is_file($abs)) {
                     continue;
@@ -555,7 +558,7 @@ class Plugin
         }
         $offset = ($page - 1) * $per_page;
         $paged_items = array_slice($items, $offset, $per_page);
-        
+
         Utils::log_info('File list retrieved', [
             'user' => $base['username'],
             'total_files' => $total,
@@ -597,14 +600,14 @@ class Plugin
 
         $param = $req->get_param('filename');
         $base  = self::sanitize_user_filename($param);
-        
+
         if (is_wp_error($base)) {
             Utils::log_warning('Delete rejected: invalid filename', [
                 'user' => $user->user_login,
                 'filename' => $param,
                 'error' => $base->get_error_message()
             ]);
-            
+
             return new \WP_REST_Response(['ok' => false, 'error' => $base->get_error_message()], 400);
         }
 
@@ -617,7 +620,7 @@ class Plugin
                 'filename' => $param,
                 'attempted_path' => $abs
             ]);
-            
+
             return new \WP_REST_Response(['ok' => false, 'error' => 'Invalid file path'], 400);
         }
 
@@ -627,7 +630,7 @@ class Plugin
                 'user' => $paths['username'],
                 'filename' => $base
             ]);
-            
+
             return new \WP_REST_Response(['ok' => false, 'error' => 'File not found'], 404);
         }
 
@@ -636,29 +639,37 @@ class Plugin
                 'user' => $paths['username'],
                 'filename' => $base
             ]);
-            
+
             return new \WP_REST_Response(['ok' => false, 'error' => 'Symbolic links not allowed'], 400);
         }
+
+        // Get file size before deletion for logging
+        $file_size = @filesize($abs);
 
         // Delete metadata file if exists
         $meta_file = $abs . '.meta.json';
         if (file_exists($meta_file)) {
-            @unlink($meta_file);
+            $meta_deleted = @unlink($meta_file);
+            Utils::log_debug('Metadata file deletion', [
+                'user' => $paths['username'],
+                'meta_file' => basename($meta_file),
+                'success' => $meta_deleted
+            ]);
         }
 
         // Delete the file
         $ok = @unlink($abs);
-        
+
         if (!$ok) {
             Utils::log_error('Delete failed: unable to remove file', [
                 'user' => $paths['username'],
                 'filename' => $base,
                 'path' => $abs
             ]);
-            
+
             return new \WP_REST_Response(['ok' => false, 'error' => 'Unable to delete file'], 500);
         }
-        
+
         Utils::log_info('File deleted successfully', [
             'user' => $paths['username'],
             'filename' => $base
@@ -686,7 +697,7 @@ class Plugin
 
         $param = $req->get_param('filename');
         $base  = self::sanitize_user_filename($param);
-        
+
         if (\is_wp_error($base)) {
             return new \WP_REST_Response(['ok' => false, 'error' => $base->get_error_message()], 400);
         }
@@ -749,9 +760,9 @@ class Plugin
         if (file_exists($index)) {
             return;
         }
-        
+
         $result = @file_put_contents($index, "<!-- silence is golden -->");
-        
+
         if ($result === false) {
             Utils::log_warning('Failed to create index.html', ['dir' => $dir]);
         }
@@ -798,19 +809,19 @@ class Plugin
         if (!is_string($filename) || $filename === '') {
             return new \WP_Error('pfu_bad_filename', 'Invalid filename');
         }
-        
+
         // Use Utils sanitization
         $base = Utils::sanitize_filename($filename);
-        
+
         // Additional validation
         if ($base === '' || $base === '.' || $base === '..' || strpos($base, "\0") !== false) {
             return new \WP_Error('pfu_bad_filename', 'Invalid filename');
         }
-        
+
         if (strlen($base) > 255) {
             return new \WP_Error('pfu_bad_filename', 'Filename too long');
         }
-        
+
         return $base;
     }
 }

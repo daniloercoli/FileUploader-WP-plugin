@@ -368,6 +368,53 @@ class Utils
     }
 
     /**
+     * Check if a filename is a metadata file
+     *
+     * @param string $filename Filename to check
+     * @return bool True if it's a metadata file
+     */
+    public static function is_metadata_file(string $filename): bool
+    {
+        return strlen($filename) > 10 && substr($filename, -10) === '.meta.json';
+    }
+
+    public static function is_system_file(string $filename): bool
+    {
+        $system_files = ['.DS_Store', 'Thumbs.db', 'desktop.ini', '._.DS_Store'];
+        return in_array($filename, $system_files, true);
+    }
+
+    /**
+     * Get metadata filename for a given file
+     *
+     * @param string $filepath Path to the file
+     * @return string Metadata file path
+     */
+    public static function get_metadata_filepath(string $filepath): string
+    {
+        return $filepath . '.meta.json';
+    }
+
+    /**
+     * Delete file and its metadata
+     *
+     * @param string $filepath Path to the file
+     * @return bool True if file was deleted successfully
+     */
+    public static function delete_file_with_metadata(string $filepath): bool
+    {
+        $meta_file = self::get_metadata_filepath($filepath);
+
+        // Delete metadata first
+        if (file_exists($meta_file)) {
+            @unlink($meta_file);
+        }
+
+        // Delete the actual file
+        return @unlink($filepath);
+    }
+
+    /**
      * Save metadata for an uploaded file
      *
      * @param string $filepath Path to the file

@@ -489,6 +489,15 @@ class Admin
                 if ($entry === '.' || $entry === '..' || $entry === 'index.html' || strpos($entry, "\0") !== false) {
                     continue;
                 }
+
+                // Skip metadata files using Utils helper
+                if (Utils::is_metadata_file($entry)) {
+                    continue;
+                }
+                if (Utils::is_system_file($entry)) {
+                    continue;
+                }
+
                 $abs = $dir . DIRECTORY_SEPARATOR . $entry;
                 if (\is_link($abs) || !is_file($abs)) continue;
 
@@ -592,11 +601,20 @@ class Admin
         $nonce = isset($_GET['_wpnonce']) ? (string)$_GET['_wpnonce'] : '';
 
         if (!\wp_verify_nonce($nonce, 'pfu_del_' . $file)) {
+            Utils::log_warning('Delete file failed: invalid nonce', [
+                'user' => $user->user_login,
+                'file' => $file
+            ]);
             \wp_die(esc_html__('Invalid nonce.', 'pfu'));
         }
 
         $baseFile = Plugin::sanitize_user_filename($file);
         if (\is_wp_error($baseFile)) {
+            Utils::log_warning('Delete file failed: invalid filename', [
+                'user' => $user->user_login,
+                'file' => $file,
+                'error' => $baseFile->get_error_message()
+            ]);
             \wp_die(esc_html($baseFile->get_error_message()));
         }
 
@@ -604,15 +622,43 @@ class Admin
         $abs   = $paths['path'] . DIRECTORY_SEPARATOR . $baseFile;
 
         if (!file_exists($abs) || !is_file($abs)) {
+            Utils::log_warning('Delete file failed: file not found', [
+                'user' => $user->user_login,
+                'file' => $baseFile
+            ]);
             \wp_redirect(\admin_url('admin.php?page=pfu-library&pfu_msg=notfound'));
             exit;
         }
 
         if (!Utils::is_path_within_base($paths['path'], $abs) || \is_link($abs)) {
+            Utils::log_error('Delete file failed: security check', [
+                'user' => $user->user_login,
+                'file' => $baseFile,
+                'path' => $abs
+            ]);
             \wp_die(esc_html__('Invalid path.', 'pfu'));
         }
 
+        // Delete metadata file if exists
+        $meta_file = $abs . '.meta.json';
+        if (file_exists($meta_file)) {
+            @unlink($meta_file);
+        }
+
         $ok = @unlink($abs);
+
+        if ($ok) {
+            Utils::log_info('File deleted via admin', [
+                'user' => $user->user_login,
+                'file' => $baseFile
+            ]);
+        } else {
+            Utils::log_error('Delete file failed: unlink error', [
+                'user' => $user->user_login,
+                'file' => $baseFile
+            ]);
+        }
+
         $msg = $ok ? 'deleted' : 'delerror';
         \wp_redirect(\admin_url('admin.php?page=pfu-library&pfu_msg=' . $msg));
         exit;
@@ -631,8 +677,22 @@ class Admin
         $mode = isset($_POST['pfu_mode']) ? (string)$_POST['pfu_mode'] : 'deny';
         $root = \PFU\Plugin::storage_root_base();
 
+        Utils::log_info('Safe deactivate initiated', [
+            'mode' => $mode,
+            'root' => $root
+        ]);
+
         if ($mode === 'delete') {
-            self::rrmdir($root);
+            $size_before = Utils::get_directory_size($root);
+            $files_count = Utils::count_directory_files($root, true);
+
+            Utils::recursive_rmdir($root);
+
+            Utils::log_info('Storage deleted during deactivation', [
+                'size_deleted' => Utils::human_bytes($size_before),
+                'files_deleted' => $files_count
+            ]);
+
             $msg = 'pfu_deleted';
         } else {
             // Write deny rules for Apache/IIS if possible
@@ -640,6 +700,11 @@ class Admin
                 @file_put_contents(trailingslashit($root) . '.htaccess', "Options -Indexes\nRequire all denied\n");
                 @file_put_contents(trailingslashit($root) . 'web.config', "<configuration>\n  <system.webServer>\n    <security>\n      <authorization>\n        <remove users=\"*\" roles=\"\" verbs=\"\" />\n        <add accessType=\"Deny\" users=\"*\" />\n      </authorization>\n    </security>\n    <directoryBrowse enabled=\"false\" />\n  </system.webServer>\n</configuration>\n");
             }
+
+            Utils::log_info('Deny rules written during deactivation', [
+                'root' => $root
+            ]);
+
             $msg = 'pfu_denied';
         }
 
@@ -659,23 +724,7 @@ class Admin
      */
     private static function rrmdir(string $dir): void
     {
-        if (!is_dir($dir)) return;
-        $items = @scandir($dir);
-        if (!is_array($items)) return;
-        foreach ($items as $it) {
-            if ($it === '.' || $it === '..') continue;
-            $p = $dir . DIRECTORY_SEPARATOR . $it;
-            if (is_link($p)) {
-                @unlink($p);
-                continue;
-            }
-            if (is_dir($p)) {
-                self::rrmdir($p);
-                continue;
-            }
-            @unlink($p);
-        }
-        @rmdir($dir);
+        Utils::recursive_rmdir($dir);
     }
 
     /**
@@ -822,8 +871,25 @@ class Admin
 
         if (!is_dir($src)) return; // no storage → nothing to do
 
+        Utils::log_info('User deletion: processing files', [
+            'user_id' => $user_id,
+            'username' => $user->user_login,
+            'action' => $action
+        ]);
+
         if ($action === 'delete') {
-            self::rrmdir($src);
+            $size = Utils::get_directory_size($src);
+            $count = Utils::count_directory_files($src, true);
+
+            Utils::recursive_rmdir($src);
+
+            Utils::log_info('User files deleted', [
+                'user_id' => $user_id,
+                'username' => $user->user_login,
+                'size_deleted' => Utils::human_bytes($size),
+                'files_deleted' => $count
+            ]);
+
             set_transient('pfu_notice_users', 'deleted_ok', 60);
             return;
         }
@@ -841,13 +907,26 @@ class Admin
                 }
 
                 @rename($src, $dst);
+
+                Utils::log_info('User files reassigned', [
+                    'from_user_id' => $user_id,
+                    'from_username' => $user->user_login,
+                    'to_user_id' => $to_id,
+                    'to_username' => $to->user_login,
+                    'destination' => $dst
+                ]);
             }
             set_transient('pfu_notice_users', 'reassigned_ok', 60);
             return;
         }
 
         if ($action === 'keep_deny') {
-            // Don't write rules automatically. Show a notice after redirect.
+            Utils::log_info('User files kept (manual deny rules required)', [
+                'user_id' => $user_id,
+                'username' => $user->user_login,
+                'path' => $src
+            ]);
+
             set_transient('pfu_notice_users', 'kept_manual_rules', 60);
             return;
         }
