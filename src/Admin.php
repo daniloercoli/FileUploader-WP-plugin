@@ -608,7 +608,7 @@ class Admin
             exit;
         }
 
-        if (!Plugin::path_within_base($paths['path'], $abs) || \is_link($abs)) {
+        if (!Utils::is_path_within_base($paths['path'], $abs) || \is_link($abs)) {
             \wp_die(esc_html__('Invalid path.', 'pfu'));
         }
 
@@ -702,14 +702,7 @@ class Admin
      */
     private static function human_size(int $bytes): string
     {
-        $u = ['B', 'KB', 'MB', 'GB', 'TB'];
-        $i = 0;
-        $n = $bytes;
-        while ($n >= 1024 && $i < count($u) - 1) {
-            $n /= 1024;
-            $i++;
-        }
-        return ($i === 0) ? "$n {$u[$i]}" : number_format($n, 2) . " {$u[$i]}";
+        return Utils::human_bytes($bytes);
     }
 
     /**
@@ -720,24 +713,7 @@ class Admin
      */
     private static function ini_bytes($val): int
     {
-        if ($val === null || $val === '') return 0;
-        $v = trim((string)$val);
-        if ($v === '-1') return PHP_INT_MAX; // unlimited
-        if (preg_match('/^\d+$/', $v)) return (int)$v;
-        if (!preg_match('/^\s*([0-9\.]+)\s*([KMGkmg])\s*$/', $v, $m)) return (int)$v;
-        $n = (float)$m[1];
-        $u = strtoupper($m[2]);
-        switch ($u) {
-            case 'G':
-                $n *= 1024;
-                // no break
-            case 'M':
-                $n *= 1024;
-                // no break
-            case 'K':
-                $n *= 1024;
-        }
-        return (int)round($n);
+        return Utils::ini_to_bytes($val);
     }
 
     /**
@@ -748,10 +724,7 @@ class Admin
      */
     private static function ini_pair(string $key): array
     {
-        $raw = @ini_get($key);
-        $bytes = self::ini_bytes($raw);
-        $human = ($raw === false || $raw === '') ? 'N/A' : ($raw === '-1' ? __('Unlimited', 'pfu') : self::human_size($bytes));
-        return [$human, $bytes, (string)$raw];
+        return Utils::get_ini_pair($key);
     }
 
     /**
