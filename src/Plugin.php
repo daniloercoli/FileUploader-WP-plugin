@@ -9,6 +9,7 @@ if (!defined('ABSPATH')) {
 class Plugin
 {
     const REST_NS   = 'fileuploader/v1';
+    const TEXT_DOMAIN = 'pfu';
     const SLUG      = 'private-file-uploader';
     const SUB_BASE  = 'media/private-file-uploader'; // under uploads/
 
@@ -107,6 +108,10 @@ class Plugin
     public static function init(): void
     {
         add_action('rest_api_init', [__CLASS__, 'register_routes']);
+        // Load translations from /languages
+        add_action('init', function () {
+            load_plugin_textdomain(self::TEXT_DOMAIN, false, dirname(plugin_basename(__FILE__)) . '/languages');
+        });
         Utils::log_debug('REST routes initialization scheduled');
     }
 
@@ -144,16 +149,29 @@ class Plugin
                         'description' => 'Page number (1-based)',
                         'type'        => 'integer',
                         'required'    => false,
+                        'sanitize_callback' => 'absint',
+                        'validate_callback' => static function ($value) {
+                            return ($value === null) || (absint($value) >= 1);
+                        },
                     ],
                     'per_page' => [
                         'description' => 'Items per page (1..1000)',
                         'type'        => 'integer',
                         'required'    => false,
+                        'sanitize_callback' => 'absint',
+                        'validate_callback' => static function ($value) {
+                            $v = absint($value);
+                            return $v >= 1 && $v <= 1000;
+                        },
                     ],
                     'order' => [
                         'description' => 'Sort by modified time: desc|asc',
                         'type'        => 'string',
                         'required'    => false,
+                        'sanitize_callback' => 'sanitize_text_field',
+                        'validate_callback' => static function ($value) {
+                            return in_array(strtolower((string)$value), ['asc', 'desc'], true);
+                        },
                     ],
                 ],
             ],
@@ -169,6 +187,10 @@ class Plugin
                     'filename' => [
                         'description' => 'Base filename to delete (no slashes)',
                         'required' => true,
+                        'sanitize_callback' => [__CLASS__, 'sanitize_user_filename'],
+                        'validate_callback' => static function ($value) {
+                            return is_string($value) && strpos($value, '/') === false;
+                        },
                     ],
                 ],
             ],
@@ -184,6 +206,10 @@ class Plugin
                     'filename' => [
                         'description' => 'Base filename to inspect (no slashes)',
                         'required' => true,
+                        'sanitize_callback' => [__CLASS__, 'sanitize_user_filename'],
+                        'validate_callback' => static function ($value) {
+                            return is_string($value) && strpos($value, '/') === false;
+                        },
                     ],
                 ],
             ],
@@ -255,7 +281,7 @@ class Plugin
         return new \WP_REST_Response([
             'ok'      => true,
             'user'    => $user ? $user->user_login : null,
-            'message' => 'Hello from Private File Uploader',
+            'message' => __('Hello from Private File Uploader', self::TEXT_DOMAIN),
         ]);
     }
 
@@ -271,7 +297,7 @@ class Plugin
         $user = wp_get_current_user();
         if (!$user || 0 === $user->ID) {
             Utils::log_error('Upload failed: user not authenticated');
-            return new \WP_REST_Response(['ok' => false, 'error' => 'Not authenticated'], 401);
+            return new \WP_REST_Response(['ok' => false, 'error' => __('Not authenticated', self::TEXT_DOMAIN)], 401);
         }
 
         if (!self::check_rate_limit($user->ID)) {
@@ -312,7 +338,7 @@ class Plugin
             Utils::log_warning('Upload rejected: empty file', [
                 'filename' => $original_filename
             ]);
-            return new \WP_REST_Response(['ok' => false, 'error' => 'Empty upload or unknown size'], 400);
+            return new \WP_REST_Response(['ok' => false, 'error' => __('Empty upload or unknown size', self::TEXT_DOMAIN)], 400);
         }
 
         if ($size > $max) {
@@ -326,7 +352,7 @@ class Plugin
 
             return new \WP_REST_Response([
                 'ok'    => false,
-                'error' => 'File too large',
+                'error' => __('File too large', self::TEXT_DOMAIN),
                 'limit' => $max,
                 'limitHuman' => Utils::human_bytes($max),
                 'got'   => $size,
@@ -352,7 +378,7 @@ class Plugin
 
             return new \WP_REST_Response([
                 'ok'        => false,
-                'error'     => 'Unsupported media type',
+                'error'     => __('Unsupported media type', self::TEXT_DOMAIN),
                 'mime'      => $mime,
                 'allowed'   => $allowed,
                 'hint'      => 'Allowed MIME types can be configured via the pfu_allowed_mime_types filter.',
@@ -463,7 +489,7 @@ class Plugin
     {
         $user = \wp_get_current_user();
         if (!$user || 0 === $user->ID) {
-            return new \WP_REST_Response(['ok' => false, 'error' => 'Not authenticated'], 401);
+            return new \WP_REST_Response(['ok' => false, 'error' => __('Not authenticated', self::TEXT_DOMAIN)], 401);
         }
 
         $base = self::get_user_base($user);
@@ -627,7 +653,7 @@ class Plugin
                 'attempted_path' => $abs
             ]);
 
-            return new \WP_REST_Response(['ok' => false, 'error' => 'Invalid file path'], 400);
+            return new \WP_REST_Response(['ok' => false, 'error' => __('Invalid file path', self::TEXT_DOMAIN)], 400);
         }
 
         // Verify it's a file inside the user's folder
@@ -637,7 +663,7 @@ class Plugin
                 'filename' => $base
             ]);
 
-            return new \WP_REST_Response(['ok' => false, 'error' => 'File not found'], 404);
+            return new \WP_REST_Response(['ok' => false, 'error' => __('File not found', self::TEXT_DOMAIN)], 404);
         }
 
         if (\is_link($abs)) {
@@ -646,7 +672,7 @@ class Plugin
                 'filename' => $base
             ]);
 
-            return new \WP_REST_Response(['ok' => false, 'error' => 'Symbolic links not allowed'], 400);
+            return new \WP_REST_Response(['ok' => false, 'error' => __('Symbolic links not allowed', self::TEXT_DOMAIN)], 400);
         }
 
         // Get file size before deletion for logging
@@ -655,7 +681,7 @@ class Plugin
         // Delete metadata file if exists
         $meta_file = $abs . '.meta.json';
         if (file_exists($meta_file)) {
-            $meta_deleted = @unlink($meta_file);
+            $meta_deleted = unlink($meta_file);
             Utils::log_debug('Metadata file deletion', [
                 'user' => $paths['username'],
                 'meta_file' => basename($meta_file),
@@ -664,7 +690,7 @@ class Plugin
         }
 
         // Delete the file
-        $ok = @unlink($abs);
+        $ok = unlink($abs);
 
         if (!$ok) {
             Utils::log_error('Delete failed: unable to remove file', [
@@ -673,7 +699,7 @@ class Plugin
                 'path' => $abs
             ]);
 
-            return new \WP_REST_Response(['ok' => false, 'error' => 'Unable to delete file'], 500);
+            return new \WP_REST_Response(['ok' => false, 'error' => __('Unable to delete file', self::TEXT_DOMAIN)], 500);
         }
 
         Utils::log_info('File deleted successfully', [
@@ -698,7 +724,7 @@ class Plugin
     {
         $user = \wp_get_current_user();
         if (!$user || 0 === $user->ID) {
-            return new \WP_REST_Response(['ok' => false, 'error' => 'Not authenticated'], 401);
+            return new \WP_REST_Response(['ok' => false, 'error' => __('Not authenticated', self::TEXT_DOMAIN)], 401);
         }
 
         $param = $req->get_param('filename');
@@ -712,11 +738,11 @@ class Plugin
         $abs   = $paths['path'] . DIRECTORY_SEPARATOR . $base;
 
         if (!Utils::is_path_within_base($paths['path'], $abs)) {
-            return new \WP_REST_Response(['ok' => false, 'error' => 'Invalid file path'], 400);
+            return new \WP_REST_Response(['ok' => false, 'error' => __('Invalid file path', self::TEXT_DOMAIN)], 400);
         }
 
         if (!\file_exists($abs) || !\is_file($abs)) {
-            return new \WP_REST_Response(['ok' => false, 'error' => 'File not found'], 404);
+            return new \WP_REST_Response(['ok' => false, 'error' => __('File not found', self::TEXT_DOMAIN)], 404);
         }
 
         // Get metadata
@@ -833,7 +859,7 @@ class Plugin
 
     private static function check_rate_limit(int $user_id): bool
     {
-        $transient_key = "pfu_rate_limit_{$user_id}";
+        $transient_key = "pfu:v1:rate:" . $user_id;
         $attempts = get_transient($transient_key) ?: 0;
 
         if ($attempts >= 50) { // 50 upload/ora
