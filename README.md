@@ -4,8 +4,17 @@ Custom REST endpoints to accept file uploads into **per-user directories**.
 Designed to pair with the **Private File Uploader** mobile app (React Native).  
 Authentication uses **WordPress Application Passwords** over HTTPS.
 
-> **Note:** This repository contains the **server component**.  
-> The React Native client integrates with these endpoints.
+> **Note:** This repository contains the **server component**. Any app can interact with these endpoints as long as it respects the API.
+>
+> We also provide two small **example mobile clients** to help developers get started:
+>
+> - **Flutter client (alternative example implementation)**\
+>   👉 [https://github.com/daniloercoli/Private-File-Uploader-Flutter-Apps](https://github.com/daniloercoli/Private-File-Uploader-Flutter-Apps)
+>
+> - **React Native client (example implementation)**\
+>   👉 [https://github.com/daniloercoli/Private-File-Uploader-ReactNative-Apps](https://github.com/daniloercoli/Private-File-Uploader-ReactNative-Apps)
+>
+> These clients demonstrate Application Password authentication and basic file upload/list/delete functionality.
 
 ---
 
