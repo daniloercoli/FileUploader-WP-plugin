@@ -468,6 +468,12 @@ class Plugin
             'path' => $moved['file']
         ]);
 
+        // Se immagine: genera anteprima "medium"
+        $thumb = null;
+        if (strpos((string)$moved['type'], 'image/') === 0) {
+            $thumb = self::make_thumbnail($moved['file'], $moved['url']);
+        }
+
         return new \WP_REST_Response([
             'ok'       => true,
             'file'     => $final_filename,
@@ -476,6 +482,9 @@ class Plugin
             'mime'     => $moved['type'],
             'owner'    => $username,
             'location' => self::SUB_BASE . '/' . $username,
+            'thumb_url'    => $thumb['url']    ?? null,
+            'thumb_width'  => $thumb['width']  ?? null,
+            'thumb_height' => $thumb['height'] ?? null,
         ], 201);
     }
 
@@ -552,6 +561,11 @@ class Plugin
                     continue;
                 }
 
+                // salta le thumbnails generate automaticamente
+                if (Utils::is_thumb_filename($entry)) {
+                    continue;
+                }
+
                 $abs = $dir . DIRECTORY_SEPARATOR . $entry;
                 if (\is_link($abs) || !is_file($abs)) {
                     continue;
@@ -562,12 +576,35 @@ class Plugin
                 $ft    = \wp_check_filetype($entry);
                 $mime  = $ft && isset($ft['type']) ? $ft['type'] : null;
 
+                $thumb_url = null;
+                $thumb_w = null;
+                $thumb_h = null;
+
+                if ($mime && strpos($mime, 'image/') === 0) {
+                    // Se abbiamo salvato una thumb in upload, si chiamerà "<name>-pfu-thumb.<ext>"
+                    $thumbAbs = self::append_suffix($abs, '-pfu-thumb');
+                    if (file_exists($thumbAbs) && is_file($thumbAbs)) {
+                        // Ricava l’URL sostituendo il basename
+                        $origUrl = $url . '/' . rawurlencode($entry);
+                        $thumb_url = self::path_replace_basename($origUrl, basename($thumbAbs));
+                        // Dimensioni (best-effort)
+                        $dim = @getimagesize($thumbAbs);
+                        if (is_array($dim) && isset($dim[0], $dim[1])) {
+                            $thumb_w = (int) $dim[0];
+                            $thumb_h = (int) $dim[1];
+                        }
+                    }
+                }
+
                 $items[] = [
                     'name'     => $entry,
                     'url'      => $url . '/' . rawurlencode($entry),
                     'size'     => is_int($size) ? $size : null,
                     'mime'     => $mime,
                     'modified' => is_int($mtime) ? $mtime : null,
+                    'thumb_url'    => $thumb_url,
+                    'thumb_width'  => $thumb_w,
+                    'thumb_height' => $thumb_h,
                 ];
             }
             closedir($dh);
@@ -706,6 +743,12 @@ class Plugin
             'user' => $paths['username'],
             'filename' => $base
         ]);
+
+        // Elimina la thumbnail associata se presente (foto-pfu-thumb.jpg)
+        $thumb_abs = self::append_suffix($abs, '-pfu-thumb');
+        if (file_exists($thumb_abs) && is_file($thumb_abs)) {
+            @unlink($thumb_abs);
+        }
 
         return new \WP_REST_Response([
             'ok'      => true,
@@ -868,5 +911,107 @@ class Plugin
 
         set_transient($transient_key, $attempts + 1, HOUR_IN_SECONDS);
         return true;
+    }
+
+    /** Legge le dimensioni della size "medium" di WordPress (no crop). Minimi 300x300. */
+    private static function wp_thumb_dims(): array
+    {
+        $w = (int) get_option('medium_size_w', 300);
+        $h = (int) get_option('medium_size_h', 300);
+        if ($w <= 0) $w = 300;
+        if ($h <= 0) $h = 300;
+        $crop = false; // medium non usa crop
+        return [$w, $h, $crop];
+    }
+
+    /** Aggiunge un suffisso prima dell’estensione (es. foto.jpg + '-pfu-thumb' => foto-pfu-thumb.jpg) */
+    private static function append_suffix(string $path, string $suffix): string
+    {
+        $dot = strrpos($path, '.');
+        if ($dot === false) {
+            return $path . $suffix;
+        }
+        $name = substr($path, 0, $dot);
+        $ext  = substr($path, $dot);
+        return $name . $suffix . $ext;
+    }
+
+    /** Dato l’URL originale, sostituisce il basename con un nuovo filename (mantiene querystring) */
+    private static function path_replace_basename(string $origUrl, string $newBase): string
+    {
+        $qpos = strpos($origUrl, '?');
+        $urlNoQ = ($qpos === false) ? $origUrl : substr($origUrl, 0, $qpos);
+        $query  = ($qpos === false) ? '' : substr($origUrl, $qpos);
+
+        $slash = strrpos($urlNoQ, '/');
+        if ($slash === false) {
+            return $newBase . $query;
+        }
+        return substr($urlNoQ, 0, $slash + 1) . rawurlencode($newBase) . $query;
+    }
+
+    /**
+     * Crea una preview “medium” accanto all’originale usando WP_Image_Editor.
+     * Ritorna [url, path, width, height] oppure null se non creata.
+     */
+    private static function make_thumbnail(string $origPath, string $origUrl): ?array
+    {
+        if (!file_exists($origPath) || !is_file($origPath)) return null;
+
+        $ft   = \wp_check_filetype(basename($origPath));
+        $mime = $ft['type'] ?? 'application/octet-stream';
+        // Limitiamoci a formati gestiti comunemente dall’editor core
+        if (!preg_match('#^image/(jpeg|png|gif|webp)$#i', $mime)) return null;
+
+        if (!function_exists('wp_get_image_editor')) {
+            require_once ABSPATH . 'wp-admin/includes/image.php';
+        }
+
+        $editor = \wp_get_image_editor($origPath);
+        if (\is_wp_error($editor)) return null;
+
+        list($tw, $th, $crop) = self::wp_thumb_dims();
+
+        // Se l’immagine è più piccola della preview richiesta, salviamo una copia as-is
+        $size = $editor->get_size();
+        if (is_array($size) && isset($size['width'], $size['height'])) {
+            if ($size['width'] <= $tw && $size['height'] <= $th) {
+                $destPath = self::append_suffix($origPath, '-pfu-thumb');
+                $saved = $editor->save($destPath);
+                if (\is_wp_error($saved) || empty($saved['path'])) return null;
+
+                $url = self::path_replace_basename($origUrl, basename($saved['path']));
+                return [
+                    'url'    => $url,
+                    'path'   => $saved['path'],
+                    'width'  => (int) ($saved['width'] ?? $size['width']),
+                    'height' => (int) ($saved['height'] ?? $size['height']),
+                ];
+            }
+        }
+
+        // Resize proporzionale (no crop per "medium")
+        $res = $editor->resize($tw, $th, $crop);
+        if (\is_wp_error($res)) return null;
+
+        // Qualità: consenti override (default 82)
+        $quality = (int) apply_filters('pfu_thumb_quality', 82);
+        if (method_exists($editor, 'set_quality')) {
+            $editor->set_quality($quality);
+        }
+
+        $destPath = self::append_suffix($origPath, '-pfu-thumb');
+        $saved = $editor->save($destPath);
+        if (\is_wp_error($saved) || empty($saved['path'])) return null;
+
+        $thumbPath = (string) $saved['path'];
+        $thumbUrl  = self::path_replace_basename($origUrl, basename($thumbPath));
+
+        return [
+            'url'    => $thumbUrl,
+            'path'   => $thumbPath,
+            'width'  => (int) ($saved['width'] ?? 0),
+            'height' => (int) ($saved['height'] ?? 0),
+        ];
     }
 }

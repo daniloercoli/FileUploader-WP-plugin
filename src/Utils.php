@@ -384,6 +384,18 @@ class Utils
         return in_array($filename, $system_files, true);
     }
 
+    /** true se il filename è una thumbnail generata (-pfu-thumb prima dell'estensione) */
+    public static function is_thumb_filename(string $filename): bool
+    {
+        // foto.jpg => foto-pfu-thumb.jpg
+        $dot = strrpos($filename, '.');
+        if ($dot === false) {
+            return str_ends_with($filename, '-pfu-thumb');
+        }
+        $name = substr($filename, 0, $dot);
+        return str_ends_with($name, '-pfu-thumb');
+    }
+
     /**
      * Get metadata filename for a given file
      *
