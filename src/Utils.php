@@ -383,6 +383,8 @@ class Utils
         $system_files = ['.DS_Store', 'Thumbs.db', 'desktop.ini', '._.DS_Store'];
         return in_array($filename, $system_files, true);
     }
+    
+    /** Helpers per gestire le thumbnail */
 
     /** true se il filename è una thumbnail generata (-pfu-thumb prima dell'estensione) */
     public static function is_thumb_filename(string $filename): bool
@@ -395,6 +397,34 @@ class Utils
         $name = substr($filename, 0, $dot);
         return str_ends_with($name, '-pfu-thumb');
     }
+
+        /** Aggiunge un suffisso prima dell’estensione (es. foto.jpg + '-pfu-thumb' => foto-pfu-thumb.jpg) */
+    public static function append_suffix(string $path, string $suffix): string
+    {
+        $dot = strrpos($path, '.');
+        if ($dot === false) {
+            return $path . $suffix;
+        }
+        $name = substr($path, 0, $dot);
+        $ext  = substr($path, $dot);
+        return $name . $suffix . $ext;
+    }
+
+    /** Dato l’URL originale, sostituisce il basename con un nuovo filename (mantiene querystring) */
+    public static function path_replace_basename(string $origUrl, string $newBase): string
+    {
+        $qpos = strpos($origUrl, '?');
+        $urlNoQ = ($qpos === false) ? $origUrl : substr($origUrl, 0, $qpos);
+        $query  = ($qpos === false) ? '' : substr($origUrl, $qpos);
+
+        $slash = strrpos($urlNoQ, '/');
+        if ($slash === false) {
+            return $newBase . $query;
+        }
+        return substr($urlNoQ, 0, $slash + 1) . rawurlencode($newBase) . $query;
+    }
+
+    /** Fine Helpers per gestire le thumbnail */
 
     /**
      * Get metadata filename for a given file
@@ -420,6 +450,11 @@ class Utils
         // Delete metadata first
         if (file_exists($meta_file)) {
             @unlink($meta_file);
+        }
+
+        $thumb_file = Utils::append_suffix($filepath, '-pfu-thumb');
+        if (file_exists($thumb_file)) {
+            @unlink($thumb_file);
         }
 
         // Delete the actual file

@@ -619,6 +619,11 @@ class Admin
                 continue;
             }
 
+            // salta i file di thumbnail
+            if (Utils::is_thumb_filename($entry)) {
+                continue;
+            }
+
             $abs = $dir . DIRECTORY_SEPARATOR . $entry;
 
             if (is_link($abs) || !is_file($abs)) {
@@ -682,25 +687,36 @@ class Admin
      */
     private static function render_file_row(array $file): void
     {
-        $name = $file['name'];
-        $url = $file['url'];
-        $is_image = strpos($file['mime'], 'image/') === 0;
-        $nonce = wp_create_nonce('pfu_del_' . $name);
-        $delete_url = admin_url('admin-post.php?action=pfu_delete_file&file=' . rawurlencode($name) . '&_wpnonce=' . $nonce);
+        $name      = $file['name'];
+        $url       = $file['url'];
+        $is_image  = strpos($file['mime'], 'image/') === 0;
 
+        // Prova a costruire l'URL della thumb affiancata (nome + "-pfu-thumb")
+        $thumb_url = null;
+        if ($is_image) {
+            // es: foto.jpg -> foto-pfu-thumb.jpg
+            $thumb_basename = Utils::append_suffix($name, '-pfu-thumb');
+            $thumb_url      = Utils::path_replace_basename($url, $thumb_basename);
+        }
+
+        $nonce      = wp_create_nonce('pfu_del_' . $name);
+        $delete_url = admin_url('admin-post.php?action=pfu_delete_file&file=' . rawurlencode($name) . '&_wpnonce=' . $nonce);
     ?>
         <tr>
             <td class="column-pfu-preview">
                 <?php if ($is_image): ?>
                     <a href="<?php echo esc_url($url); ?>" target="_blank" rel="noopener">
-                        <img class="pfu-thumb" src="<?php echo esc_url($url); ?>" alt="" loading="lazy" />
+                        <img
+                            class="pfu-thumb"
+                            src="<?php echo esc_url($thumb_url ?: $url); ?>"
+                            data-fallback="<?php echo esc_url($url); ?>"
+                            onerror="if(this.dataset.fallback){this.onerror=null;this.src=this.dataset.fallback;}"
+                            alt=""
+                            loading="lazy" />
                     </a>
                 <?php else: ?>
                     <?php
-                    $icon = wp_mime_type_icon($file['mime']);
-                    if (empty($icon)) {
-                        $icon = wp_mime_type_icon('application/octet-stream');
-                    }
+                    $icon = wp_mime_type_icon($file['mime']) ?: wp_mime_type_icon('application/octet-stream');
                     ?>
                     <img class="pfu-icon" src="<?php echo esc_url($icon); ?>" alt="" loading="lazy" />
                 <?php endif; ?>

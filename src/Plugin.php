@@ -582,11 +582,11 @@ class Plugin
 
                 if ($mime && strpos($mime, 'image/') === 0) {
                     // Se abbiamo salvato una thumb in upload, si chiamerà "<name>-pfu-thumb.<ext>"
-                    $thumbAbs = self::append_suffix($abs, '-pfu-thumb');
+                    $thumbAbs = Utils::append_suffix($abs, '-pfu-thumb');
                     if (file_exists($thumbAbs) && is_file($thumbAbs)) {
                         // Ricava l’URL sostituendo il basename
                         $origUrl = $url . '/' . rawurlencode($entry);
-                        $thumb_url = self::path_replace_basename($origUrl, basename($thumbAbs));
+                        $thumb_url = Utils::path_replace_basename($origUrl, basename($thumbAbs));
                         // Dimensioni (best-effort)
                         $dim = @getimagesize($thumbAbs);
                         if (is_array($dim) && isset($dim[0], $dim[1])) {
@@ -745,7 +745,7 @@ class Plugin
         ]);
 
         // Elimina la thumbnail associata se presente (foto-pfu-thumb.jpg)
-        $thumb_abs = self::append_suffix($abs, '-pfu-thumb');
+        $thumb_abs = Utils::append_suffix($abs, '-pfu-thumb');
         if (file_exists($thumb_abs) && is_file($thumb_abs)) {
             @unlink($thumb_abs);
         }
@@ -924,32 +924,6 @@ class Plugin
         return [$w, $h, $crop];
     }
 
-    /** Aggiunge un suffisso prima dell’estensione (es. foto.jpg + '-pfu-thumb' => foto-pfu-thumb.jpg) */
-    private static function append_suffix(string $path, string $suffix): string
-    {
-        $dot = strrpos($path, '.');
-        if ($dot === false) {
-            return $path . $suffix;
-        }
-        $name = substr($path, 0, $dot);
-        $ext  = substr($path, $dot);
-        return $name . $suffix . $ext;
-    }
-
-    /** Dato l’URL originale, sostituisce il basename con un nuovo filename (mantiene querystring) */
-    private static function path_replace_basename(string $origUrl, string $newBase): string
-    {
-        $qpos = strpos($origUrl, '?');
-        $urlNoQ = ($qpos === false) ? $origUrl : substr($origUrl, 0, $qpos);
-        $query  = ($qpos === false) ? '' : substr($origUrl, $qpos);
-
-        $slash = strrpos($urlNoQ, '/');
-        if ($slash === false) {
-            return $newBase . $query;
-        }
-        return substr($urlNoQ, 0, $slash + 1) . rawurlencode($newBase) . $query;
-    }
-
     /**
      * Crea una preview “medium” accanto all’originale usando WP_Image_Editor.
      * Ritorna [url, path, width, height] oppure null se non creata.
@@ -976,11 +950,11 @@ class Plugin
         $size = $editor->get_size();
         if (is_array($size) && isset($size['width'], $size['height'])) {
             if ($size['width'] <= $tw && $size['height'] <= $th) {
-                $destPath = self::append_suffix($origPath, '-pfu-thumb');
+                $destPath = Utils::append_suffix($origPath, '-pfu-thumb');
                 $saved = $editor->save($destPath);
                 if (\is_wp_error($saved) || empty($saved['path'])) return null;
 
-                $url = self::path_replace_basename($origUrl, basename($saved['path']));
+                $url = Utils::path_replace_basename($origUrl, basename($saved['path']));
                 return [
                     'url'    => $url,
                     'path'   => $saved['path'],
@@ -1000,12 +974,12 @@ class Plugin
             $editor->set_quality($quality);
         }
 
-        $destPath = self::append_suffix($origPath, '-pfu-thumb');
+        $destPath = Utils::append_suffix($origPath, '-pfu-thumb');
         $saved = $editor->save($destPath);
         if (\is_wp_error($saved) || empty($saved['path'])) return null;
 
         $thumbPath = (string) $saved['path'];
-        $thumbUrl  = self::path_replace_basename($origUrl, basename($thumbPath));
+        $thumbUrl  = Utils::path_replace_basename($origUrl, basename($thumbPath));
 
         return [
             'url'    => $thumbUrl,
